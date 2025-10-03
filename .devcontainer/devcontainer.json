@@ -1,10 +1,27 @@
 {
-  "name": "Sportsbook Dev",
-  "dockerFile": "../Containerfile",
-  "context": "..",
-  "remoteUser": "root",
-  "mounts": [
-    "source=${localWorkspaceFolder},target=/workspace,type=bind"
+  "name": "Sportsbook Assistant",
+  "build": {
+    "dockerfile": "../Containerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "runArgs": [
+    "--network=sportsbook-net",
+    "--volume=${env:HOME}/.ssh:/root/.ssh:ro", // 🔑 mount local ssh keys read-only
+    "--volume=${env:HOME}/.gitconfig:/root/.gitconfig:ro" // optional, so git user is correct
   ],
-  "postCreateCommand": "uv sync"
+  "remoteUser": "root",
+  "settings": {
+    "python.defaultInterpreterPath": "/usr/local/bin/python",
+    "python.analysis.extraPaths": [
+      "/workspace/src"
+    ],
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-azuretools.vscode-docker"
+  ],
+  "postCreateCommand": "make serve"
 }

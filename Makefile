@@ -1,31 +1,22 @@
-# Variables
-IMAGE_NAME = sportsbook-dev
-CONTAINER_NAME = sportsbook-dev
-WORKDIR = /workspace
-PORT = 8000
+.PHONY: build run serve dev
 
-# Build the dev image
 build:
-	podman build -t $(IMAGE_NAME) -f Containerfile .
+	podman build -t sportsbook-dev -f Containerfile .
 
-# Run the container interactively with mounted code
 run:
 	podman run -it --rm \
-		-v $(PWD):$(WORKDIR) \
-		-p $(PORT):$(PORT) \
-		--name $(CONTAINER_NAME) \
-		$(IMAGE_NAME)
+		-v $(PWD):/workspace \
+		-w /workspace \
+		-p 8000:8000 \
+		sportsbook-dev bash
 
-# Open a shell inside the running container (if detached)
-shell:
-	podman exec -it $(CONTAINER_NAME) bash
-
-# Start FastAPI (runs inside container)
 serve:
-	uvicorn app.main:app --host 0.0.0.0 --port $(PORT) --reload
-
-# Clean up local containers/images
-clean:
-	-podman stop $(CONTAINER_NAME)
-	-podman rm $(CONTAINER_NAME)
-	-podman rmi $(IMAGE_NAME)
+	UV_SYSTEM_PYTHON=1 uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
+# Handy shortcut: rebuild & run FastAPI directly
+dev: build
+	podman run -it --rm \
+		-v $(PWD):/workspace \
+		-w /workspace \
+		-p 8000:8000 \
+		sportsbook-dev \
+		make serve

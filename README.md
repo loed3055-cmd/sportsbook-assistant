@@ -86,8 +86,11 @@ Inside ```app/main.py```, we call ```Base.metadata.create_all(bind=engine)``` fo
 ```bash
 DATABASE_URL=postgresql+psycopg2://sportsuser:sportspass@localhost:5432/sportsbook
 ```
+
 This is picked up by ```app/config.py```.
+
 ## Entity Relationship Diagram
+
 ```mermaid
 erDiagram
     TEAMS ||--o{ PLAYERS : has

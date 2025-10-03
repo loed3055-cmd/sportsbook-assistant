@@ -1,15 +1,26 @@
-FROM docker.io/python:3.11-slim
+FROM python:3.11-slim
 
-# System deps
-RUN apt-get update && apt-get install -y \
-    build-essential libpq-dev curl git && \
-    rm -rf /var/lib/apt/lists/*
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    make gcc libpq-dev git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install uv (your package manager)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv globally
+RUN pip install --upgrade pip && pip install uv
 
-# Create workdir
 WORKDIR /workspace
 
-# Default command
-CMD ["bash"]
+# Copy metadata first for cache
+COPY pyproject.toml uv.lock ./
+
+# Install deps into system Python (respect lockfile)
+ENV UV_SYSTEM_PYTHON=1
+RUN uv pip install --system .
+
+# Add src to the PYTHONPATH
+ENV PYTHONPATH=/workspace/src
+
+# Copy source
+COPY . .
+
+CMD ["uvicorn", "src.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
