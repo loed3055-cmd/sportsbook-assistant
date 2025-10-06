@@ -1,22 +1,11 @@
-.PHONY: build run serve dev
+dev:
+	podman-compose -f infra/compose/docker-compose.dev.yml up --build
 
-build:
-	podman build -t sportsbook-dev -f Containerfile .
+test:
+	podman-compose -f infra/compose/docker-compose.test.yml run --rm app
 
-run:
-	podman run -it --rm \
-		-v $(PWD):/workspace \
-		-w /workspace \
-		-p 8000:8000 \
-		sportsbook-dev bash
+prod:
+	podman-compose -f infra/compose/docker-compose.prod.yml up -d
 
-serve:
-	UV_SYSTEM_PYTHON=1 uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
-# Handy shortcut: rebuild & run FastAPI directly
-dev: build
-	podman run -it --rm \
-		-v $(PWD):/workspace \
-		-w /workspace \
-		-p 8000:8000 \
-		sportsbook-dev \
-		make serve
+down:
+	podman-compose -f infra/compose/docker-compose.dev.yml down

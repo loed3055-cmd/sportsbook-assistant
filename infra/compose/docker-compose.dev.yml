@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  app:
+    container_name: sportsbook-app-dev
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../src:/workspace/src
+    env_file:
+      - ../../.env.example
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/sportsbook
+
+  db:
+    image: postgres:16
+    container_name: sportsbook-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sportsbook
+    ports:
+      - "5432:5432"
+    volumes:
+      - sportsbook-data:/var/lib/postgresql/data
+
+volumes:
+  sportsbook-data:
