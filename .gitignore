@@ -13,24 +13,23 @@ __MACOSX/
 *.pyc
 *.pyo
 *.pyd
-*.pdb
 __pycache__/
 *.so
 *.egg
 *.egg-info/
 .eggs/
 .env
+.env.*
 .venv
 venv/
 ENV/
 env/
 build/
-develop-eggs/
 dist/
+develop-eggs/
 downloads/
 pip-wheel-metadata/
 .wheels/
-.share/
 .pytest_cache/
 .coverage
 htmlcov/
@@ -68,6 +67,24 @@ yarn-debug.log*
 yarn-error.log*
 
 # ==========================================
+# Infrastructure & Secrets
+# ==========================================
+infra/.terraform/
+infra/**/.terraform/
+terraform.tfstate
+terraform.tfstate.*
+*.tfvars
+*.tfvars.json
+secrets/
+certs/
+private/
+*.pem
+*.crt
+*.key
+*.p12
+*.csr
+
+# ==========================================
 # Misc / Generated
 # ==========================================
 tmp/
@@ -77,4 +94,3 @@ tmp/
 *.orig
 *.tmp
 *~
-.DS_Store
