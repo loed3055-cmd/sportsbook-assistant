@@ -1,10 +1,80 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# ==========================================
+# macOS & System
+# ==========================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+__MACOSX/
 
-# Virtual environments
+# ==========================================
+# Python
+# ==========================================
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+__pycache__/
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.env
 .venv
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+pip-wheel-metadata/
+.wheels/
+.share/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.pyre/
+.dmypy.json
+ruff_cache/
+*.log
+
+# ==========================================
+# IDEs & Editors
+# ==========================================
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# ==========================================
+# Containers & Dev Environment
+# ==========================================
+.devcontainer/*.log
+podman-machine/
+.envrc
+*.pid
+*.sock
+*.pid.lock
+
+# ==========================================
+# Node / Frontend (if added later)
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# Misc / Generated
+# ==========================================
+tmp/
+*.bak
+*.swp
+*.swo
+*.orig
+*.tmp
+*~
+.DS_Store
