@@ -18,8 +18,12 @@ __pycache__/
 *.egg
 *.egg-info/
 .eggs/
-.env
-.env.*
+# Env files anywhere in the repo
+*.env
+*.env.*
+**/.env
+**/.env.*
+src/app/.env
 .venv
 venv/
 ENV/
