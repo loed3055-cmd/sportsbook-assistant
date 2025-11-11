@@ -1,0 +1,20 @@
+[project]
+name = "sportsbook-assistant"
+version = "0.1.0"
+description = "MVP Sportsbook odds aggregator with FastAPI + Postgres"
+authors = [
+    { name = "Edwin Lobo", email = "loed3055@gmail.com" }
+]
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.0",
+    "psycopg[binary]>=3.1.0",
+    "alembic>=1.13.0",
+    "pydantic>=2.0.0",
+]
+
+[tool.uv]
+# settings for uv (if you want to configure extras later)

@@ -1,0 +1,12 @@
+FROM python:3.12
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git openssh-client make vim iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements/dev.txt /workspace/requirements.txt
+RUN pip install -r requirements.txt
+
+CMD ["sleep", "infinity"]
