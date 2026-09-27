@@ -80,6 +80,8 @@ terraform.tfstate.*
 *.tfvars
 *.tfvars.json
 secrets/
+gha-creds-*.json
+*service-account*.json
 certs/
 private/
 *.pem
@@ -87,6 +89,11 @@ private/
 *.key
 *.p12
 *.csr
+
+# ==========================================
+# Local pick'em data (schedules, weekly sheets with pool members' names)
+# ==========================================
+examples/
 
 # ==========================================
 # Misc / Generated
