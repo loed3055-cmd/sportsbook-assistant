@@ -1,0 +1,5 @@
+# Only for scripts/push_pickem_to_sheets.py (weekly Google Sheets import).
+# Not an app dependency: keep out of base.txt. make_pickem_sheet.py stays stdlib-only.
+# Floors mirror the `pickem` extra in pyproject.toml (requests>=2.33.0: security floor).
+google-auth>=2.58,<3
+requests>=2.33.0,<3

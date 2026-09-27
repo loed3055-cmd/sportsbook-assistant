@@ -1,0 +1,130 @@
+name: Pick'em weekly
+
+# Creates this week's pick'em tab in the pool's Google Sheet
+# (scripts/push_pickem_to_sheets.py). One-time setup: docs/pickem-setup.md.
+#
+# SLO: the week's tab is in the pool sheet by Wednesday 12:00 ET for at least
+# 17 of 18 regular-season weeks. Health check: this run's status. GitHub emails
+# the workflow owner on a failed scheduled run, and every run writes its outcome
+# to the job summary. A miss is fixed by re-running with workflow_dispatch.
+
+on:
+  schedule:
+    # 13:00 UTC on Wednesdays. GitHub cron is always UTC and ignores DST, so this
+    # runs at 09:00 ET under EDT (Mar-Nov) and 08:00 ET under EST (Nov-Mar).
+    # Both are after the script's Wednesday 03:00 ET week rollover, so the run picks up
+    # the new week, and both leave hours before the 12:00 ET SLO deadline.
+    # Scheduled runs can start late when GitHub is busy.
+    # Season months only (Sep-Dec, Jan); the script also exits 0 off-season.
+    - cron: "0 13 * 1,9-12 3"
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "NFL regular-season week (1-18). Empty = the week in progress (it rolls over Wednesday 03:00 ET)."
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Only read the sheet and describe what would be written."
+        required: false
+        type: boolean
+        default: false
+
+# No default token scopes; the job grants only what it needs.
+permissions: {}
+
+# Never two runs at once: two concurrent runs could race to create the same tab.
+# A queued run waits instead of cancelling one that's mid-write.
+concurrency:
+  group: pickem-weekly
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.12.19" # keep in step with ci.yaml
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  push-pickem:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The secrets live in this environment, which only main can deploy to
+    # (docs/pickem-setup.md). The WIF provider also admits only refs/heads/main.
+    environment: pickem
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC token for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Keyless: swaps the GitHub OIDC token for short-lived credentials that
+      # impersonate the pickem-writer service account. The action writes an
+      # external-account ADC file and sets GOOGLE_APPLICATION_CREDENTIALS, which
+      # google.auth.default() in the script picks up.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PICKEM_SA }}
+
+      # Exit codes (see the script's docstring):
+      #   0 ok; 1 generation/validation/API failure; 2 configuration error -> run fails.
+      #   3 the week's tab already exists -> notice, run passes. The tab is already
+      #     in the pool, so the SLO is met, and the script never overwrites it
+      #     (players may have entered picks). A rerun of a successful week is
+      #     therefore a safe no-op. To rewrite a tab, run the script by hand with
+      #     --force; this workflow never passes it.
+      - name: Push this week's tab
+        env:
+          # Inputs arrive through env, never ${{ }} in the script body, so they
+          # can't inject shell. Both are empty on scheduled runs.
+          WEEK: ${{ inputs.week }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          PICKEM_SPREADSHEET_ID: ${{ secrets.PICKEM_SPREADSHEET_ID }}
+          PICKEM_BOOKMAKERS: ${{ vars.PICKEM_BOOKMAKERS }}
+          PICKEM_SEASON_START: ${{ vars.PICKEM_SEASON_START }}
+        run: |
+          set -uo pipefail
+          args=()
+          if [[ -n "$WEEK" ]]; then
+            # Digits only, 1-18. The value isn't echoed back.
+            if [[ ! "$WEEK" =~ ^[0-9]{1,2}$ ]] || (( 10#$WEEK < 1 || 10#$WEEK > 18 )); then
+              echo "::error title=Invalid week input::week must be a whole number from 1 to 18"
+              exit 2
+            fi
+            args+=(--week "$((10#$WEEK))")
+          fi
+          if [[ "$DRY_RUN" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+
+          # --locked: exact versions from uv.lock. Only the pickem extra, no test
+          # extra, no Postgres; the script never imports the app.
+          rc=0
+          uv run --locked --extra pickem python scripts/push_pickem_to_sheets.py "${args[@]}" || rc=$?
+
+          case "$rc" in
+            0)
+              echo "Pick'em ($EVENT, dry_run=${DRY_RUN:-false}): OK" >> "$GITHUB_STEP_SUMMARY" ;;
+            3)
+              echo "::notice title=Tab already exists::This week's pick'em tab is already in the pool sheet; nothing was changed."
+              echo "Pick'em ($EVENT): tab already existed, left untouched (exit 3)" >> "$GITHUB_STEP_SUMMARY"
+              rc=0 ;;
+            2)
+              echo "::error title=Pick'em configuration error::Check the pickem environment's secrets and vars (docs/pickem-setup.md)."
+              echo "Pick'em ($EVENT): FAILED, configuration error (exit 2)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              echo "::error title=Pick'em push failed::The script exited $rc; see the log above."
+              echo "Pick'em ($EVENT): FAILED (exit $rc)" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          exit "$rc"
