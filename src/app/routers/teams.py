@@ -8,6 +8,8 @@ router = APIRouter()
 
 @router.post("/", response_model=Team)
 def create_team(team: TeamCreate, db: Session = Depends(get_db)):
+    """Create a normalized team entry that feeds the Postgres data layer."""
+
     db_team = TeamModel(**team.dict())
     db.add(db_team)
     db.commit()
@@ -16,4 +18,6 @@ def create_team(team: TeamCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[Team])
 def list_teams(db: Session = Depends(get_db)):
+    """Return all teams from the canonical table so ingestion and agents can reference them."""
+
     return db.query(TeamModel).all()
