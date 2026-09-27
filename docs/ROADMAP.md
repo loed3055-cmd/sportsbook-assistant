@@ -68,6 +68,8 @@ Each phase builds toward the project’s long-term goal: **an infrastructure blu
 **Deliverables**
 - [ ] Vector database integration (pgvector or Qdrant)
 - [ ] Embedding pipeline for game, team, and odds metadata
+- [ ] Optional public-data connector research for NCAA basketball stats,
+      recruiting signals, coaching changes, and Kendra/vector document export
 - [ ] Query agent orchestration (e.g., `OddsAgent`, `InsightAgent`)
 - [ ] Natural language question interface (FastAPI endpoint or chatbot)
 - [ ] Predictive or trend analysis features (e.g., “underdog hit rate”)

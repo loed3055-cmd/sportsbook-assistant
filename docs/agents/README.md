@@ -37,10 +37,10 @@ the orchestrator-workers pattern [1].
 ## Launch backlog
 Pick'em goes first, then the backend platform.
 
-- **M0: Test harness.** Fix `make test` (Dockerfile.test copies the wrong
+- **M0: Test harness.** *(Done 2026-09-26.)* Fix `make test` (Dockerfile.test copies the wrong
   files) and add the missing `pytest-asyncio` and `python-multipart`.
   Reconcile `psycopg2` vs `psycopg[binary]`. Make CI green. *platform → qa.*
-- **M1: Pick'em live.** Today the weekly CSV comes from
+- **M1: Pick'em live.** *(Built and reviewed; waiting on Edwin's setup in docs/pickem-setup.md.)* Today the weekly CSV comes from
   `scripts/make_pickem_sheet.py` and Edwin imports it into the pool's Google
   Sheet by hand. The goal is to automate the import.
   - *data-engineer:* add a Sheets writer that uses the Google Sheets API. It
@@ -51,6 +51,7 @@ Pick'em goes first, then the backend platform.
     Options: macOS launchd/cron (runs only while the Mac is awake), or a
     GitHub Actions `schedule` workflow (always on, credentials held in repo
     secrets). Set an SLO for when the sheet must land [10].
+    Chosen: the GitHub Actions cron (Wed 13:00 UTC, keyless WIF). One-time setup is in `docs/pickem-setup.md`.
   - The job is deterministic, so no LLM agent is needed. Start simple [1].
     Keep a Gemini/LangGraph agent in reserve for a step that needs judgment,
     such as reading messy pick cells.
