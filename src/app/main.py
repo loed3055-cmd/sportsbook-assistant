@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.db import Base, engine
-from app.routers import predictions, teams
+from app.routers import predictions, teams, weather
 from app.routers.ingest import (
     router as ingest_router,
     shutdown_ingest_scheduler,
@@ -15,6 +15,7 @@ app = FastAPI(title="Sportsbook Assistant MVP")
 app.include_router(teams.router, prefix="/teams", tags=["teams"])
 app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
 app.include_router(predictions.router, prefix="/predictions", tags=["predictions"])
+app.include_router(weather.router, prefix="/weather", tags=["weather"])
 
 
 @app.on_event("startup")

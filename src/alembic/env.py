@@ -7,7 +7,7 @@ from app.config import DATABASE_URL
 from app.db import Base
 
 # Import models so their tables register on Base.metadata (for autogenerate).
-from app.models import game_result, job, odds, prediction, team  # noqa: F401
+from app.models import game_result, game_weather, job, odds, prediction, team  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
