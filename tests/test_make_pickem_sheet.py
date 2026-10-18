@@ -25,6 +25,15 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import make_pickem_sheet as mps  # noqa: E402
 
+
+# Never read the developer's real macOS Keychain: tests that need a key pass one.
+REAL_KEYCHAIN_SECRET = mps.keychain_secret
+
+
+@pytest.fixture(autouse=True)
+def _no_keychain(monkeypatch):
+    monkeypatch.setattr(mps, "keychain_secret", lambda service: None)
+
 ET = mps.ET_ZONE
 FIXED = ["week", "kickoff_et", "matchup", "favorite", "spread",
          "spread_source", "spread_as_of_et", "ats_winner"]
@@ -442,14 +451,60 @@ def test_team_code_lookup(name, code):
 # --- configuration ------------------------------------------------------------------
 
 
-def test_api_key_only_from_env_or_argument(monkeypatch):
+def test_api_key_from_argument_env_then_keychain(monkeypatch):
     assert mps.ENV_ODDS_KEY == "ODDS_API_KEY"
     monkeypatch.delenv("ODDS_API_KEY", raising=False)
+    no_keychain = lambda service: None  # noqa: E731
     with pytest.raises(mps.ConfigError) as exc:
-        mps.odds_api_key()
+        mps.odds_api_key(keychain=no_keychain)
     assert "ODDS_API_KEY" in str(exc.value)
-    assert mps.odds_api_key(env={"ODDS_API_KEY": " k1 "}) == "k1"
+    assert mps.KEYCHAIN_SERVICE in str(exc.value)  # the error says how to store it
+    assert mps.odds_api_key(env={"ODDS_API_KEY": " k1 "}, keychain=no_keychain) == "k1"
     assert mps.odds_api_key("k2", env={"ODDS_API_KEY": "k1"}) == "k2"
+
+    asked = []
+
+    def keychain(service):
+        asked.append(service)
+        return " k3\n"
+
+    # The keychain is only a fallback: env and argument win without consulting it.
+    assert mps.odds_api_key(env={"ODDS_API_KEY": "k1"}, keychain=keychain) == "k1"
+    assert asked == []
+    assert mps.odds_api_key(env={}, keychain=keychain) == "k3"
+    assert asked == [mps.KEYCHAIN_SERVICE]
+
+
+def test_keychain_secret_off_macos_never_runs_anything(monkeypatch):
+    monkeypatch.setattr(mps.sys, "platform", "linux")
+    monkeypatch.setattr(mps.subprocess, "run", lambda *a, **k: pytest.fail("ran a command"))
+    assert REAL_KEYCHAIN_SECRET("anything") is None
+
+
+@pytest.mark.parametrize(
+    "returncode, stdout, expected",
+    [(0, "abc123\n", "abc123"), (44, "", None), (0, "  \n", None)],  # 44: item not found
+)
+def test_keychain_secret_on_macos(monkeypatch, returncode, stdout, expected):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return mps.subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(mps.sys, "platform", "darwin")
+    monkeypatch.setattr(mps.subprocess, "run", run)
+    assert REAL_KEYCHAIN_SECRET("svc") == expected
+    assert calls == [["/usr/bin/security", "find-generic-password", "-s", "svc", "-w"]]
+
+
+def test_keychain_secret_survives_missing_security_binary(monkeypatch):
+    def run(cmd, **kwargs):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(mps.sys, "platform", "darwin")
+    monkeypatch.setattr(mps.subprocess, "run", run)
+    assert REAL_KEYCHAIN_SECRET("svc") is None
 
 
 def test_bookmaker_preference_flag_env_and_default():

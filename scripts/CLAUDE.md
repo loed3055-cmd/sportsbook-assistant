@@ -7,7 +7,11 @@ shared logic: the slate and spreads from The Odds API v4 (behind
 from the season opener, pick resolution, record computation, and tab-name
 pattern detection. ESPN is not used: its terms prohibit scripted access.
 
-Env vars: `ODDS_API_KEY` (required), `PICKEM_SPREADSHEET_ID` (push only),
+Env vars: `ODDS_API_KEY` (required; on macOS, if unset, `odds_api_key()` falls back to
+the Keychain item `sportsbook-odds-api` via `/usr/bin/security`. Tests disable that with an
+autouse fixture so they never read a real Keychain). `setup-odds-key.sh` stores the key in both the Keychain and the
+GitHub `pickem` secret; the user must run it in their own terminal (hidden prompt). Never ask
+for the key in chat, `PICKEM_SPREADSHEET_ID` (push only),
 optional `PICKEM_BOOKMAKERS` (default `draftkings,fanduel,betmgm`) and
 `PICKEM_SEASON_START` (YYYY-MM-DD; default: Thursday after Labor Day). Cost:
 **1 credit per run** (`/odds`, markets=spreads × regions=us; `/events` is

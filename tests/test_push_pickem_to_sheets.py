@@ -26,6 +26,15 @@ sys.path.insert(0, str(SCRIPTS))
 import make_pickem_sheet as mps  # noqa: E402
 import push_pickem_to_sheets as push  # noqa: E402
 
+
+# Never read the developer's real macOS Keychain: tests that need a key pass one.
+REAL_KEYCHAIN_SECRET = mps.keychain_secret
+
+
+@pytest.fixture(autouse=True)
+def _no_keychain(monkeypatch):
+    monkeypatch.setattr(mps, "keychain_secret", lambda service: None)
+
 SHEET_ID = "sheet-abc123"
 API_KEY = "KEY-s3cr3t-0123456789abcdef"
 ENV = {"PICKEM_SPREADSHEET_ID": SHEET_ID, "ODDS_API_KEY": API_KEY}

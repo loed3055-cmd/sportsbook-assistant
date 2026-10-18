@@ -27,6 +27,7 @@ import json
 import os
 import posixpath
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -632,6 +633,9 @@ def resolve_header(season: int, week: int, pool=None, workbook: bytes | None = N
 ODDS_API_BASE = "https://api.the-odds-api.com"
 ODDS_SPORT_PATH = "/v4/sports/americanfootball_nfl"
 ENV_ODDS_KEY = "ODDS_API_KEY"
+# macOS fallback when $ODDS_API_KEY is unset: a Keychain generic password with
+# this service name (store it with: security add-generic-password -U -a "$USER" -s <name> -w).
+KEYCHAIN_SERVICE = "sportsbook-odds-api"
 ENV_BOOKMAKERS = "PICKEM_BOOKMAKERS"
 ENV_SEASON_START = "PICKEM_SEASON_START"
 DEFAULT_BOOKMAKERS = ("draftkings", "fanduel", "betmgm")
@@ -689,12 +693,29 @@ def team_code(name: str) -> str | None:
     return _TEAM_LOOKUP.get(" ".join((name or "").lower().split()))
 
 
-def odds_api_key(value: str | None = None, env=None) -> str:
+def keychain_secret(service: str) -> str | None:
+    """The macOS Keychain generic password for `service`, or None (other OS, not found)."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", service, "-w"],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    secret = proc.stdout.strip() if proc.returncode == 0 else ""
+    return secret or None
+
+
+def odds_api_key(value: str | None = None, env=None, keychain=None) -> str:
+    """The Odds API key: argument, else $ODDS_API_KEY, else the macOS Keychain."""
     env = os.environ if env is None else env
     key = (value or env.get(ENV_ODDS_KEY) or "").strip()
     if not key:
+        key = ((keychain or keychain_secret)(KEYCHAIN_SERVICE) or "").strip()
+    if not key:
         raise ConfigError(f"missing environment variable {ENV_ODDS_KEY}: a key for The Odds API "
-                          "(https://the-odds-api.com, v4)")
+                          "(https://the-odds-api.com, v4). On macOS, store it once with: "
+                          f'security add-generic-password -U -a "$USER" -s {KEYCHAIN_SERVICE} -w')
     return key
 
 
