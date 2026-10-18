@@ -12,6 +12,8 @@ least 17 of 18 regular-season weeks**. Health check: the workflow run status.
 GitHub emails you when a scheduled run fails, and each run writes its outcome
 to the job summary. To recover a miss, rerun it (see "First run" below).
 
+New to this? Start with `docs/pickem-runbook.md`, which explains where to get each value and how to test locally first.
+
 Do these steps once, in order. Nothing here runs by itself. The cron starts only
 after the workflow file is on `main` of the repo you choose.
 
@@ -23,6 +25,11 @@ There are two public remotes:
 |---|---|---|---|
 | `origin` | `edwin-lobo/sportsbook-assistant` | 1070517071 | A **fork** of upstream. GitHub doesn't run Actions in a fork until you enable them in the fork's Actions tab. |
 | `upstream` | `loed3055-cmd/sportsbook-assistant` | 1066763931 | Not a fork |
+
+**Use `upstream` (`loed3055-cmd/sportsbook-assistant`).** It's the remote this
+machine can push to (`loobo07` has write access), and local branches track it.
+`loobo07` has only read access to the fork. Step 5 needs **admin** on the
+repo, so run it as the owner account, or have the owner grant `loobo07` admin.
 
 Choose **one** of them. The WIF provider admits only that repo's numeric ID,
 so the workflow in the other repo can never authenticate. Disable the workflow

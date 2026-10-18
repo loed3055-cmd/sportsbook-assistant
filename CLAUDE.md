@@ -18,7 +18,12 @@ and launch backlog, see `docs/agents/README.md`.
 
 ## Commands
 
-The README's `make build` / `make run` / `make serve` targets do not exist.
+Make targets: `make dev` / `make down` (dev stack via
+`infra/compose/docker-compose.dev.yml`, which loads a local, gitignored
+`.env.example`), `make prod`, `make test`, `make lock`, `make audit`.
+`tests/test_readme_features.py` fails if the README mentions a make target,
+endpoint, or env var that doesn't exist, so update the README with any
+route or target change.
 
 `make test` runs the full suite in Podman (`infra/docker/Dockerfile.test`,
 Python 3.13 + uv) against a throwaway `postgres:16` from
@@ -68,11 +73,22 @@ hand-maintained floors for the standalone pick'em venv; keep it in step with the
   each pick's own spread, push on exact whole-number lines, team-code
   normalization (`WAS→WSH`, `JAC→JAX`, `LA→LAR`, case-insensitive). Standings
   endpoint aggregates W-L-P per source.
+- Weather (`/weather`): `services/stadiums.py` is pure reference data (32 home
+  stadiums + neutral-site slugs, with roof type); `services/weather.py` fetches
+  the kickoff-hour forecast with stdlib `urllib` (NWS for US venues, Open-Meteo
+  otherwise; domes are never fetched) and returns `status="error"` instead of
+  raising. Tests pass a fake `urlopen`; the router exposes module-level
+  `urlopen`/`utcnow` for that. Refresh is on demand, with no scheduler.
+- Only `/teams`, `/ingest`, `/predictions`, and `/weather` are mounted. `models/{game,
+  box_score,player}.py`, `routers/{game,odds}.py`, `schemas/game.py`, and
+  `services/sports_ref.py` are empty placeholders; don't assume they hold
+  anything.
 
 ## Migrations
 
 Alembic lives in `src/alembic/` (`alembic.ini` sets `prepend_sys_path = src`).
 There is **no baseline migration**: `teams`, `odds`, `jobs` exist only via
-`create_all`, and the first revision (`7c3e1a9b2d4f`) adds `predictions` and
-`game_results`. On a DB where the app has already booted, `create_all` will
+`create_all`. The first revision (`7c3e1a9b2d4f`) adds `predictions` and
+`game_results`, and `4e8b2c6d1a3f` adds `game_weather`. Import new models in
+`src/alembic/env.py`. On a DB where the app has already booted, `create_all` will
 have created those tables, so use `alembic stamp head` rather than `upgrade`.

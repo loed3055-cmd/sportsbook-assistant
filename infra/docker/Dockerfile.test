@@ -18,6 +18,8 @@ COPY tests/ /app/tests/
 # Pick'em tooling; tests/test_push_pickem_to_sheets.py imports scripts/.
 # examples/ is deliberately not copied: tests use inline fixtures.
 COPY scripts/ /app/scripts/
+# tests/test_readme_features.py checks the README against the Makefile and app.
+COPY README.md Makefile /app/
 RUN uv sync --locked --extra test
 
 CMD ["pytest", "-v"]
