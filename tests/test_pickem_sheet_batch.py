@@ -194,7 +194,7 @@ def test_cli_refuses_to_write_the_batch_inside_the_repo(tmp_path, capsys):
     meta_path = tmp_path / "meta.json"
     csv_path.write_text(_csv())
     meta_path.write_text(json.dumps(META))
-    out = SCRIPTS.parent / "batch.json"
+    out = SCRIPTS.parent / "docs" / "leak-batch.json"  # tracked by git, unlike batch.json
     assert batch.main(["--csv", str(csv_path), "--meta", str(meta_path), "--season", "2026",
                        "--out", str(out)]) == 2
     assert "inside the repo" in capsys.readouterr().err and not out.exists()
