@@ -17,6 +17,28 @@ New to this? Start with `docs/pickem-runbook.md`, which explains where to get ea
 Do these steps once, in order. Nothing here runs by itself. The cron starts only
 after the workflow file is on `main` of the repo you choose.
 
+## Scripted setup
+
+`scripts/setup-pickem-cron.sh` runs steps 1–5 for you. It's idempotent: each step
+checks first and skips what already exists, and it never deletes anything. The
+manual steps below stay the reference. Run it in your own terminal:
+
+```bash
+bash scripts/setup-pickem-cron.sh --project PROJECT_ID --check     # read-only: ✓/✗ per item
+bash scripts/setup-pickem-cron.sh --project PROJECT_ID --dry-run   # print every command, change nothing
+bash scripts/setup-pickem-cron.sh --project PROJECT_ID             # apply, asking y/N before each step
+```
+
+`--repo` defaults to `loed3055-cmd/sportsbook-assistant`. `--sa-name`, `--pool-id`
+and `--provider-id` override the defaults used below. The GCP half needs `gcloud`
+logged in as a project owner. The GitHub half (step 5) needs `gh` logged in as a
+repo **admin**. If those are different accounts, run `--only gcp`, then
+`--only github` (add `--project-number N` if that machine has no `gcloud`). Secrets
+are read with hidden input and passed to `gh` on stdin. `ODDS_API_KEY` goes
+through `scripts/setup-odds-key.sh`, which also stores it in the macOS Keychain.
+Sharing the sheet, the responsible-gambling note, and the first run (step 6)
+stay manual. The script lists them when it finishes.
+
 ## 0. Choose the repo that runs the cron
 
 There are two public remotes:

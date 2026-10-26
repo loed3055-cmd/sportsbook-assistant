@@ -105,3 +105,6 @@ tmp/
 *.orig
 *.tmp
 *~
+
+# Agent worktrees (Claude Code isolation)
+.claude/worktrees/
