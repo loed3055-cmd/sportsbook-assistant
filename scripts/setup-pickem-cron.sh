@@ -181,6 +181,8 @@ SIDE="gcp"
 SA_FOUND=0
 
 ok() { echo "✓ $1${2:+ ($2)}"; }
+# Collapse all whitespace runs to one space and trim, for exact comparisons.
+squash() { printf '%s' "$1" | tr '\t\n' '  ' | tr -s ' ' | sed 's/^ //; s/ $//'; }
 # A missing item that apply can create. In check mode it fails the run.
 missing() {
   local detail="${2:-missing}"
@@ -328,13 +330,10 @@ step_provider() {
     ACTIVE)
       cond="$(gq iam workload-identity-pools providers describe "$PROVIDER_ID" --project="$PROJECT" \
         --location=global --workload-identity-pool="$POOL_ID" --format='value(attributeCondition)')"
-      case "$cond" in
-        *"assertion.repository_id == '${REPO_ID}'"*)
-          case "$cond" in
-            *"assertion.ref == 'refs/heads/main'"*"assertion.environment == '${ENV_NAME}'"*)
-              ok "WIF provider exists, admits only $REPO (id $REPO_ID) main + $ENV_NAME" "$PROVIDER_ID"; return ;;
-          esac ;;
-      esac
+      # The whole condition must match: a substring match would pass "<condition> || true".
+      if [ "$(squash "$cond")" = "$(squash "$CONDITION")" ]; then
+        ok "WIF provider exists, admits only $REPO (id $REPO_ID) main + $ENV_NAME" "$PROVIDER_ID"; return
+      fi
       problem "WIF provider $PROVIDER_ID" "its attribute condition doesn't pin repo id $REPO_ID, refs/heads/main and environment $ENV_NAME" \
         "gcloud iam workload-identity-pools providers update-oidc $PROVIDER_ID --project=$PROJECT --location=global --workload-identity-pool=$POOL_ID --attribute-condition=\"$CONDITION\""
       return ;;
@@ -452,6 +451,26 @@ secret_missing() {
   fi
 }
 
+# The WIF condition and the main-only environment are only as strong as main itself:
+# without protection, anyone with push access could change the workflow and use the
+# pickem secrets. Never changed here (rulesets are a judgment call); check only.
+step_main_protection() {
+  local rules prot
+  rules="$(ghq api "repos/$REPO/rules/branches/main" --jq '.[].type')" || rules=""
+  case "
+$rules
+" in
+    *"
+pull_request
+"*) ok "main is protected" "a ruleset requires a pull request"; return ;;
+  esac
+  prot="$(ghq api "repos/$REPO/branches/main/protection" --jq '.required_pull_request_reviews != null')" || prot=""
+  if [ "$prot" = "true" ]; then ok "main is protected" "branch protection requires reviews"; return; fi
+  missing "main is protected" "nothing requires a pull request, so anyone with push access could change the workflow and use the pickem secrets"
+  echo "    fix by hand (admin): Settings > Rules > Rulesets > New branch ruleset: target main,"
+  echo "    require a pull request (1 approval), block force pushes"
+}
+
 step_secret_odds() {
   local flag="" orc
   if has_secret ODDS_API_KEY; then ok "secret ODDS_API_KEY" "set; value never shown"; return; fi
@@ -544,6 +563,7 @@ if want_github; then
   SIDE="github"
   echo "== GitHub (step 5)"
   step_env
+  step_main_protection
   load_vars
   step_var GCP_WIF_PROVIDER "$PROVIDER_NAME"
   step_var GCP_PICKEM_SA "$SA_EMAIL"

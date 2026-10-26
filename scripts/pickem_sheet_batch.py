@@ -81,6 +81,9 @@ def _cell(value) -> dict:
 def build_batch(csv_text: str, meta: dict, season: int) -> dict:
     """The requests that add this week's tab, plus a summary with no cell values."""
     result = result_from_csv(csv_text, season)
+    if result.header[len(mps.FIXED_COLUMNS):] == mps.placeholder_header()[len(mps.FIXED_COLUMNS):]:
+        raise push.PushError("header_fallback: the CSV has placeholder player columns, not the "
+                             "pool's players; rebuild it from a workbook with a pick'em tab")
     values = push.validate(result, allow_header_fallback=False)
     tabs = tabs_from_meta(meta)
     titles = [t["title"] for t in tabs]
@@ -136,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", help="write the plan JSON here (default: stdout)")
     args = p.parse_args(argv)
     season = args.season or mps.current_season(mps.now_et())
+    if args.out and mps.inside_repo(args.out):
+        print("error: refusing to write the batch (it holds pool data) inside the repo; "
+              "write it to a scratch directory", file=sys.stderr)
+        return EXIT_INPUT
 
     try:
         csv_text = args.csv.read_text(encoding="utf-8-sig")

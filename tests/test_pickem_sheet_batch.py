@@ -187,3 +187,20 @@ def test_helper_is_stdlib_only():
     imported = {n.names[0].name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)}
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     assert not imported & {"google", "requests", "pandas", "app"}
+
+
+def test_cli_refuses_to_write_the_batch_inside_the_repo(tmp_path, capsys):
+    csv_path = tmp_path / "week.csv"
+    meta_path = tmp_path / "meta.json"
+    csv_path.write_text(_csv())
+    meta_path.write_text(json.dumps(META))
+    out = SCRIPTS.parent / "batch.json"
+    assert batch.main(["--csv", str(csv_path), "--meta", str(meta_path), "--season", "2026",
+                       "--out", str(out)]) == 2
+    assert "inside the repo" in capsys.readouterr().err and not out.exists()
+
+
+def test_placeholder_header_is_refused():
+    header = list(mps.FIXED_COLUMNS) + [f"player_{i}" for i in range(1, 7)]
+    with pytest.raises(push.PushError, match="header_fallback"):
+        _build(_csv(header=header))

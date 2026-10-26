@@ -1393,7 +1393,28 @@ def serve(port: int, schedule: Path | None, season: int | None,
 # --- CLI --------------------------------------------------------------------
 
 
-def report(result: SheetResult, destination: str | None) -> None:
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def inside_repo(path) -> bool:
+    """True if `path` is in this checkout and git would track it.
+
+    Pool exports and CSVs built from them hold players' names and picks; one
+    `git add -A` would publish them. Gitignored paths are fine. If git can't
+    answer (no git, not a checkout), anything inside the repo counts as unsafe.
+    """
+    target = Path(path).resolve()
+    if target != REPO_ROOT and REPO_ROOT not in target.parents:
+        return False
+    try:
+        ignored = subprocess.run(["git", "check-ignore", "-q", str(target)], cwd=REPO_ROOT,
+                                 capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ignored = False
+    return not ignored
+
+
+def report(result: SheetResult, destination: str | None, show_values: bool = False) -> None:
     by_kind: dict[str, list[dict]] = {}
     for w in result.warnings:
         by_kind.setdefault(w["kind"], []).append(w)
@@ -1413,7 +1434,9 @@ def report(result: SheetResult, destination: str | None) -> None:
         "unresolved_pick": "unresolvable picks (not in records)",
     }
     for kind, items in by_kind.items():
-        detail = ", ".join(f"{w['game']} ({w['detail']})" if w["game"] else w["detail"] for w in items)
+        # public_detail drops player names and raw cell text, as the push does.
+        texts = [w["detail"] if show_values else w.get("public_detail", w["detail"]) for w in items]
+        detail = ", ".join(f"{w['game']} ({t})" if w["game"] else t for w, t in zip(items, texts))
         print(f"  {labels.get(kind, kind)} ({len(items)}): {detail}", file=sys.stderr)
     if destination:
         print(f"  wrote {destination}", file=sys.stderr)
@@ -1442,11 +1465,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--allow-header-fallback", action="store_true",
                    help="with --workbook: write placeholder player columns if no week tab has a "
                         "pick'em header (by default that is an error, as in the push)")
+    p.add_argument("--show-values", action="store_true",
+                   help="print player names and raw cell text in warnings (local use only)")
     args = p.parse_args(argv)
 
     if args.serve:
         serve(args.serve, args.schedule, args.season, args.bookmakers, args.season_start)
         return 0
+
+    if args.workbook and not args.dry_run and args.out != "-":
+        target = Path(args.out) if args.out else Path.cwd() / "x.csv"
+        if inside_repo(target):
+            print("error: refusing to write pool data inside the repo (it could be committed); "
+                  "use --out outside the checkout or in a gitignored folder", file=sys.stderr)
+            return 2
 
     try:
         workbook = args.workbook.read_bytes() if args.workbook else None
@@ -1471,10 +1503,10 @@ def main(argv: list[str] | None = None) -> int:
     out_path = args.out or f"{tab_title(DEFAULT_TAB_PATTERN, result.week, result.season)}.csv"
     if args.dry_run or out_path == "-":
         sys.stdout.write(text)
-        report(result, None)
+        report(result, None, args.show_values)
     else:
         Path(out_path).write_text(text)
-        report(result, out_path)
+        report(result, out_path, args.show_values)
     # The new tab's name, from the pool's own naming pattern, for whoever writes it.
     print(f"tab_name: {result.tab_name}", file=sys.stderr)
     return 0

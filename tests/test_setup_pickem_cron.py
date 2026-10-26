@@ -85,6 +85,10 @@ case "$*" in
   "api $E/deployment-branch-policies --jq "*)
     [ -e "$S/env" ] || nf; cat "$S/policies" 2>/dev/null; exit 0 ;;
   "api -X POST $E/deployment-branch-policies -f name=main -f type=branch") echo main >> "$S/policies"; exit 0 ;;
+  "api repos/$R/rules/branches/main --jq "*)
+    cat "$S/main_rules" 2>/dev/null; exit 0 ;;
+  "api repos/$R/branches/main/protection --jq "*)
+    [ -e "$S/main_protection" ] || nf; cat "$S/main_protection"; exit 0 ;;
   "variable list "*)
     [ -e "$S/env" ] || nf; cat "$S/vars" 2>/dev/null; exit 0 ;;
   "variable set "*)
@@ -149,6 +153,7 @@ def populate(env, *, skip=()):
         "policies": "main\n",
         "vars": f"GCP_WIF_PROVIDER\t{PROVIDER_NAME}\nGCP_PICKEM_SA\t{SA_EMAIL}\n",
         "secrets": "ODDS_API_KEY\nPICKEM_SPREADSHEET_ID\n",
+        "main_rules": "pull_request\nnon_fast_forward\n",
     }
     for name, body in files.items():
         if name not in skip:
@@ -272,7 +277,7 @@ def test_check_passes_when_everything_is_in_place(env):
     for item in (
         "APIs enabled", "service account exists", "no project roles", "no user-managed keys",
         "WIF pool exists", "WIF provider exists", f"repo id {REPO_ID} may impersonate",
-        "GitHub environment 'pickem'", "deploys from main only",
+        "GitHub environment 'pickem'", "deploys from main only", "main is protected",
         "variable GCP_WIF_PROVIDER", "variable GCP_PICKEM_SA",
         "secret ODDS_API_KEY", "secret PICKEM_SPREADSHEET_ID",
     ):
@@ -364,6 +369,9 @@ def test_apply_from_scratch_creates_everything_and_keeps_secrets_off_argv(env):
     # Never deletes or removes anything.
     assert not any(word in joined for word in ("delete", "remove", "disable"))
 
+    # Branch protection is a manual admin step: apply says how, and --check needs it.
+    assert "✗ main is protected" in result.stdout and "Rulesets" in result.stdout
+    (Path(env["FAKE_STATE"]) / "main_rules").write_text("pull_request\n")
     check = run(env, "--check")
     assert check.returncode == 0, check.stdout + check.stderr
 
@@ -581,3 +589,41 @@ def test_reuses_setup_odds_key_instead_of_duplicating_it():
     text = SCRIPT.read_text()
     assert "setup-odds-key.sh" in text
     assert "secret set ODDS_API_KEY" not in text
+
+
+def test_check_flags_a_condition_loosened_with_extra_clauses(env):
+    populate(env)
+    (Path(env["FAKE_STATE"]) / "provider_condition").write_text(CONDITION + " || true\n")
+    result = run(env, "--check")
+    assert result.returncode == 1
+    assert "✗ WIF provider sportsbook-pickem: its attribute condition doesn't pin" in result.stdout
+
+
+def test_check_accepts_the_condition_with_different_whitespace(env):
+    populate(env)
+    (Path(env["FAKE_STATE"]) / "provider_condition").write_text("  " + CONDITION.replace(" && ", "  &&\n ") + "\n")
+    assert run(env, "--check").returncode == 0
+
+
+def test_check_fails_when_main_is_unprotected(env):
+    populate(env, skip=("main_rules",))
+    result = run(env, "--check")
+    assert result.returncode == 1
+    assert "✗ main is protected" in result.stdout
+    assert "Rulesets" in result.stdout  # tells them how
+    assert mutating_calls(env) == []
+
+
+def test_classic_branch_protection_with_reviews_counts(env):
+    populate(env, skip=("main_rules",))
+    (Path(env["FAKE_STATE"]) / "main_protection").write_text("true\n")
+    result = run(env, "--check")
+    assert result.returncode == 0, result.stdout
+    assert "✓ main is protected" in result.stdout
+
+
+def test_rules_without_a_review_requirement_do_not_count(env):
+    populate(env)
+    (Path(env["FAKE_STATE"]) / "main_rules").write_text("deletion\n")
+    result = run(env, "--check")
+    assert result.returncode == 1 and "✗ main is protected" in result.stdout

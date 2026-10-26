@@ -1113,3 +1113,35 @@ def test_check_tab_not_a_zip_workbook_is_exit_2(no_build, monkeypatch, tmp_path)
     bad = tmp_path / "pool.xlsx"
     bad.write_bytes(b"PK-not-really")
     assert push.main(["--check-tab", "--workbook", str(bad)], env={}, session_factory=no_session) == 2
+
+
+# --- the watchdog path keeps pool data private -------------------------------------
+
+
+def test_generator_workbook_warnings_hide_names_and_picks_by_default(week4_api, tmp_path, capsys):
+    pool = six_player_pool()
+    pool["nfl_week_3_2026_pickem"][1][8] = "ZZ-RAW-PICK"  # unresolvable pick text
+    path = write_xlsx(tmp_path, pool)
+    assert mps.main(["--workbook", str(path), "--out", str(tmp_path / "o.csv")]) == 0
+    err = capsys.readouterr().err
+    assert "unresolvable picks" in err
+    assert "ZZ-RAW-PICK" not in err and "Ann - The Alpha" not in err
+
+    mps._ODDS_CACHE.clear()
+    assert mps.main(["--workbook", str(path), "--out", str(tmp_path / "o.csv"), "--show-values"]) == 0
+    assert "ZZ-RAW-PICK" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["leak.csv", "scripts/leak.csv"])
+def test_generator_workbook_refuses_to_write_pool_data_inside_the_repo(week4_api, tmp_path, capsys, name):
+    out = Path(mps.__file__).resolve().parents[1] / name
+    path = write_xlsx(tmp_path, six_player_pool())
+    assert mps.main(["--workbook", str(path), "--out", str(out)]) == 2
+    assert "inside the repo" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_generator_default_out_inside_repo_is_refused_with_a_workbook(week4_api, tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(Path(mps.__file__).resolve().parents[1])
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, six_player_pool()))]) == 2
+    assert "inside the repo" in capsys.readouterr().err
