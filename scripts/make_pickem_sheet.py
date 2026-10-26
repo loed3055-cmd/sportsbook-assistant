@@ -15,7 +15,13 @@ container venv and does not work on macOS).
     ODDS_API_KEY=... PICKEM_PUBLISHED_CSV_URL=https://docs.google.com/.../pubhtml \\
         python3 scripts/make_pickem_sheet.py --week 3
     python3 scripts/make_pickem_sheet.py --workbook pool.xlsx --week 3
+    python3 scripts/make_pickem_sheet.py --workbook pool.xlsx --out week.csv
     python3 scripts/make_pickem_sheet.py --serve 8000
+
+With --workbook (a downloaded copy of the pool sheet) the CSV holds exactly the
+14 columns and rows push_pickem_to_sheets.py would write for the same inputs,
+and anything the push refuses is an error here too. The new tab's name, from
+the pool's own naming pattern, is printed on stderr as `tab_name: <name>`.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import unescape as xml_unescape
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -50,6 +57,8 @@ ET_ZONE = ZoneInfo("America/New_York")
 FIXED_COLUMNS = ["week", "kickoff_et", "matchup", "favorite", "spread",
                  "spread_source", "spread_as_of_et", "ats_winner"]
 N_PLAYERS = 6
+# The pool sheet's columns, A:N. The push reads and writes only these.
+N_COLUMNS = len(FIXED_COLUMNS) + N_PLAYERS
 DEFAULT_TAB_PATTERN = "nfl_week_{week}_{season}_pickem"
 
 # Optional: a publish-to-web URL of the pool sheet, for local runs of this
@@ -231,7 +240,8 @@ def load_sheets(source: Path | bytes) -> dict[str, list[list[str]]]:
                 cells[_col_index(ref) if ref else len(cells)] = value
             width = max(cells) + 1 if cells else 0
             rows.append([cells.get(i, "") for i in range(width)])
-        sheets[name_m.group(1)] = rows
+        # The name is an XML attribute: "&amp;" in the file is "&" in the sheet.
+        sheets[xml_unescape(name_m.group(1), {"&quot;": '"', "&apos;": "'"})] = rows
     return sheets
 
 
@@ -343,6 +353,26 @@ def detect_tab_pattern(titles, default: str = DEFAULT_TAB_PATTERN) -> str:
 
 def tab_title(pattern: str, week: int, season: int) -> str:
     return pattern.format(week=week, season=season)
+
+
+def intended_tab_name(titles, week: int, season: int) -> str:
+    """Name for the new week's tab, following the pool's existing week tabs."""
+    return tab_title(detect_tab_pattern(titles), week, season)
+
+
+def pool_tab_titles(titles, season: int) -> list[str]:
+    """The week tabs the pool is read from: all of `season`'s, plus the latest
+    earlier-season one (week 1's header). The push reads exactly these through
+    the Sheets API; an xlsx is narrowed to the same set, so both give the same header."""
+    keyed = [(k, title) for title, k in week_tab_keys(list(titles), season).items()]
+    this_season = [title for k, title in keyed if k[0] == season]
+    earlier = sorted((k, title) for k, title in keyed if k[0] < season)
+    return this_season + ([earlier[-1][1]] if earlier else [])
+
+
+def pool_slice(pool: dict[str, list[list[str]]], season: int) -> dict[str, list[list[str]]]:
+    """`pool` as the push sees it: only pool_tab_titles, and only columns A:N."""
+    return {title: [list(r[:N_COLUMNS]) for r in pool[title]] for title in pool_tab_titles(pool, season)}
 
 
 # --- picks, records, headers --------------------------------------------------
@@ -528,7 +558,10 @@ def pool_header(pool: dict[str, list[list[str]]], season: int, week: int) -> tup
 
     With no earlier week tab this season (week 1), the latest tab's header is
     carried through unchanged, so week 1 keeps last season's numbers.
+    Only the tabs and columns the push reads (pool_slice) are used, whatever
+    the source.
     """
+    pool = pool_slice(pool, season)
     found = latest_header_tab(pool, season, week)
     if found is None:
         raise SheetError("the pool sheet has no week tab with a pick'em header row "
@@ -577,15 +610,17 @@ def placeholder_header() -> list[str]:
 
 
 def resolve_header(season: int, week: int, pool=None, workbook: bytes | None = None,
-                   headers: str = "live") -> tuple[list[str], str, list[dict]]:
+                   headers: str = "live", titles_out: list | None = None) -> tuple[list[str], str, list[dict]]:
     """Header row, where it came from, and warnings.
 
     Sources, first match wins: `pool` (tabs already read, e.g. via the Sheets
     API), an uploaded `workbook`, then `headers`: "live" (the sheet in
     PICKEM_PUBLISHED_CSV_URL), a URL, a .csv path (header row used as-is) or an
     .xlsx path. An unreadable upload is an error; anything else falls back to
-    placeholder player columns with a `header_fallback` warning.
+    placeholder player columns with a `header_fallback` warning. If given,
+    `titles_out` is extended with every tab title of the pool that was read.
     """
+    titles_out = [] if titles_out is None else titles_out
     label = "pool sheet"
     if workbook:
         pool, label = load_sheets(workbook), "uploaded workbook"
@@ -609,6 +644,7 @@ def resolve_header(season: int, week: int, pool=None, workbook: bytes | None = N
                     raise SheetError(f"{path} does not start with a pick'em header row")
                 return row, f"{path} (header used as-is)", []
             pool, label = load_sheets(path), str(path)
+        titles_out.extend(pool)
         header, source, warnings = pool_header(pool, season, week)
         return header, f"{label}: {source}", warnings
     except (SheetError, OSError, StopIteration) as exc:
@@ -984,6 +1020,9 @@ class SheetResult:
     csv: str
     warnings: list[dict] = field(default_factory=list)
     header_source: str = ""
+    # Name for the new tab, from the pool's own week-tab naming (default pattern
+    # when no pool was read).
+    tab_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -1049,8 +1088,9 @@ def build_sheet(
 
     games = fetch_week_slate(season, week, api_key=api_key, bookmakers=bookmakers,
                              season_start=season_start)
+    titles: list[str] = []
     header, header_src, header_warnings = resolve_header(season, week, pool=pool, workbook=workbook,
-                                                         headers=headers)
+                                                         headers=headers, titles_out=titles)
     warnings: list[dict] = []
     stamp = now.strftime("%Y-%m-%d %H:%M ET")
 
@@ -1107,7 +1147,85 @@ def build_sheet(
     return SheetResult(
         week=week, season=season, generated_at=stamp, header=header,
         rows=out_rows, csv=buf.getvalue(), warnings=header_warnings + warnings, header_source=header_src,
+        tab_name=intended_tab_name(titles, week, season),
     )
+
+
+# --- the push's values ----------------------------------------------------------
+#
+# The exact cells push_pickem_to_sheets.py writes. The generator CLI uses the
+# same function for --workbook, so its CSV equals what the push would write.
+
+PUSH_FORMULA_PREFIXES = CSV_FORMULA_PREFIXES
+PUSH_CONTROL_PREFIXES = CSV_CONTROL_PREFIXES
+
+
+class ValidationError(SheetError):
+    """The sheet can't be written as is. Messages cite positions, never values."""
+
+
+def _number(text: str, cell: str, integer: bool):
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        raise ValidationError(f"cell {cell} must be a number") from None
+    if integer:
+        if not value.is_integer():
+            raise ValidationError(f"cell {cell} must be a whole number")
+        return int(value)
+    return int(value) if value.is_integer() else value
+
+
+def sheet_values(result: SheetResult, allow_header_fallback: bool = False) -> list[list]:
+    """Header plus rows, typed for the Sheets API's RAW input (week an int,
+    spread a number). Refuses anything the push must not write: not exactly the
+    pool's 14 columns, a blank player header, no games, a formula-like or
+    control-character cell, or placeholder players without allow_header_fallback."""
+    header = result.header
+    if len(header) != N_COLUMNS:
+        raise ValidationError(f"header must have the pool's {N_COLUMNS} columns; got {len(header)}")
+    wrong = [col_letter(i) for i, (got, want) in enumerate(zip(header, FIXED_COLUMNS)) if got != want]
+    if wrong:
+        raise ValidationError(f"header columns {', '.join(wrong)} are not the pool's fixed columns "
+                              f"({', '.join(FIXED_COLUMNS)})")
+    blank = [col_letter(i) for i in range(len(FIXED_COLUMNS), N_COLUMNS) if not str(header[i]).strip()]
+    if blank:
+        raise ValidationError(f"player header cell(s) {', '.join(c + '1' for c in blank)} are blank")
+    if not result.rows:
+        raise ValidationError(f"week {result.week} has no games")
+
+    typed: list[list] = [list(header)]
+    for r, row in enumerate(result.rows, start=2):
+        if len(row) != N_COLUMNS:
+            raise ValidationError(f"row {r} has {len(row)} columns, expected {N_COLUMNS}")
+        out = list(row)
+        out[0] = _number(row[0], f"A{r}", integer=True)
+        if out[0] != result.week:
+            raise ValidationError(f"row {r} is not for week {result.week}")
+        spread = str(row[4]).strip()
+        out[4] = _number(spread, f"E{r}", integer=False) if spread else ""
+        typed.append(out)
+
+    for r, row in enumerate(typed, start=1):
+        for c, cell in enumerate(row):
+            if isinstance(cell, str) and (cell.startswith(PUSH_CONTROL_PREFIXES)
+                                          or cell.lstrip().startswith(PUSH_FORMULA_PREFIXES)):
+                raise ValidationError(f"cell {col_letter(c)}{r} starts with a formula or control "
+                                      "character; refusing to write it")
+
+    if not allow_header_fallback and any(w["kind"] == "header_fallback" for w in result.warnings):
+        raise ValidationError(
+            "header_fallback: player names could not be read from the pool sheet, so placeholder "
+            "columns would be written. Fix the sheet, or pass --allow-header-fallback."
+        )
+    return typed
+
+
+def values_csv(values: list[list]) -> str:
+    """sheet_values as CSV text (the push's --show-values output, the generator's --workbook CSV)."""
+    buf = io.StringIO()
+    csv.writer(buf).writerows(values)
+    return buf.getvalue()
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -1277,7 +1395,28 @@ def serve(port: int, schedule: Path | None, season: int | None,
 # --- CLI --------------------------------------------------------------------
 
 
-def report(result: SheetResult, destination: str | None) -> None:
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def inside_repo(path) -> bool:
+    """True if `path` is in this checkout and git would track it.
+
+    Pool exports and CSVs built from them hold players' names and picks; one
+    `git add -A` would publish them. Gitignored paths are fine. If git can't
+    answer (no git, not a checkout), anything inside the repo counts as unsafe.
+    """
+    target = Path(path).resolve()
+    if target != REPO_ROOT and REPO_ROOT not in target.parents:
+        return False
+    try:
+        ignored = subprocess.run(["git", "check-ignore", "-q", str(target)], cwd=REPO_ROOT,
+                                 capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ignored = False
+    return not ignored
+
+
+def report(result: SheetResult, destination: str | None, show_values: bool = False) -> None:
     by_kind: dict[str, list[dict]] = {}
     for w in result.warnings:
         by_kind.setdefault(w["kind"], []).append(w)
@@ -1297,7 +1436,9 @@ def report(result: SheetResult, destination: str | None) -> None:
         "unresolved_pick": "unresolvable picks (not in records)",
     }
     for kind, items in by_kind.items():
-        detail = ", ".join(f"{w['game']} ({w['detail']})" if w["game"] else w["detail"] for w in items)
+        # public_detail drops player names and raw cell text, as the push does.
+        texts = [w["detail"] if show_values else w.get("public_detail", w["detail"]) for w in items]
+        detail = ", ".join(f"{w['game']} ({t})" if w["game"] else t for w, t in zip(items, texts))
         print(f"  {labels.get(kind, kind)} ({len(items)}): {detail}", file=sys.stderr)
     if destination:
         print(f"  wrote {destination}", file=sys.stderr)
@@ -1323,29 +1464,53 @@ def main(argv: list[str] | None = None) -> int:
                         "an .xlsx path, or a .csv whose header row is used as-is")
     p.add_argument("--serve", type=int, metavar="PORT",
                    help="run as an HTTP service instead of generating a file")
+    p.add_argument("--allow-header-fallback", action="store_true",
+                   help="with --workbook: write placeholder player columns if no week tab has a "
+                        "pick'em header (by default that is an error, as in the push)")
+    p.add_argument("--show-values", action="store_true",
+                   help="print player names and raw cell text in warnings (local use only)")
     args = p.parse_args(argv)
 
     if args.serve:
         serve(args.serve, args.schedule, args.season, args.bookmakers, args.season_start)
         return 0
 
+    if args.workbook and not args.dry_run and args.out != "-":
+        target = Path(args.out) if args.out else Path.cwd() / "x.csv"
+        if inside_repo(target):
+            print("error: refusing to write pool data inside the repo (it could be committed); "
+                  "use --out outside the checkout or in a gitignored folder", file=sys.stderr)
+            return 2
+
+    try:
+        workbook = args.workbook.read_bytes() if args.workbook else None
+    except OSError as exc:
+        print(f"error: could not read --workbook ({type(exc).__name__})", file=sys.stderr)
+        return 1
     try:
         result = build_sheet(
             week=args.week, season=args.season, schedule=args.schedule,
-            workbook=args.workbook.read_bytes() if args.workbook else None,
-            headers=args.headers, bookmakers=args.bookmakers, season_start=args.season_start,
+            workbook=workbook, headers=args.headers, bookmakers=args.bookmakers,
+            season_start=args.season_start,
         )
+        # With a pool workbook (e.g. the watchdog's export of the pool sheet),
+        # write exactly the cells push_pickem_to_sheets.py would, and refuse what
+        # it refuses.
+        text = (values_csv(sheet_values(result, args.allow_header_fallback)) if workbook is not None
+                else result.csv)
     except SheetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     out_path = args.out or f"{tab_title(DEFAULT_TAB_PATTERN, result.week, result.season)}.csv"
     if args.dry_run or out_path == "-":
-        sys.stdout.write(result.csv)
-        report(result, None)
+        sys.stdout.write(text)
+        report(result, None, args.show_values)
     else:
-        Path(out_path).write_text(result.csv)
-        report(result, out_path)
+        Path(out_path).write_text(text)
+        report(result, out_path, args.show_values)
+    # The new tab's name, from the pool's own naming pattern, for whoever writes it.
+    print(f"tab_name: {result.tab_name}", file=sys.stderr)
     return 0
 
 

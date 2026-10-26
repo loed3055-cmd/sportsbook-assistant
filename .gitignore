@@ -105,3 +105,14 @@ tmp/
 *.orig
 *.tmp
 *~
+
+# Agent worktrees (Claude Code isolation)
+.claude/worktrees/
+
+# Pool data (players and picks): exports and generated weeks never belong in git
+*.xlsx
+nfl_week_*_pickem*.csv
+pool.xlsx
+week.csv
+meta.json
+batch.json

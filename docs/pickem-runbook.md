@@ -110,7 +110,18 @@ fails, see Troubleshooting below.
 ## Stage 3: turn on the Wednesday cron
 
 Follow steps 3–6 of `docs/pickem-setup.md` with
-`GITHUB_REPO=loed3055-cmd/sportsbook-assistant`.
+`GITHUB_REPO=loed3055-cmd/sportsbook-assistant`. Or let the script do steps 1–5
+(see "Scripted setup" in that doc). Run it in your own terminal:
+
+```bash
+bash scripts/setup-pickem-cron.sh --project <project-id> --dry-run  # what it would do
+bash scripts/setup-pickem-cron.sh --project <project-id>            # do it (asks before each step)
+bash scripts/setup-pickem-cron.sh --project <project-id> --check    # all ✓? exit 0
+```
+
+It skips anything that already exists and never deletes. It stops early with a
+clear message if `gcloud` is missing, `gh` isn't logged in, or the `gh` account
+isn't a repo admin.
 
 - **Admin access needed for step 5.** Creating the `pickem` environment and its
   secrets needs **admin** on the repo. `loobo07` has write access only. Either

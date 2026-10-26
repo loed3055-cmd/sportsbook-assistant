@@ -786,3 +786,392 @@ def test_yearless_pool_still_detects_its_own_week_tabs(built):
     session = FakeSession(["Week 1", "Week 2", "Week 3"])
     assert run(["--week", "4", "--season", "2026"], session) == 0
     assert set(built[-1]["pool"]) == {"Week 1", "Week 2", "Week 3"}
+
+
+# --- xlsx export of a pool (the watchdog's input) -------------------------------------
+
+import csv as _csv  # noqa: E402
+import re as _re  # noqa: E402
+import zipfile as _zipfile  # noqa: E402
+from xml.sax.saxutils import escape as _esc  # noqa: E402
+
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def xlsx_from_pool(pool: dict[str, list[list[str]]]) -> bytes:
+    """An xlsx shaped like a Google Sheets download: sharedStrings, relative rel
+    targets, numbers as bare <v>, and empty cells omitted (as Excel does)."""
+    strings: list[str] = []
+    index: dict[str, int] = {}
+    sheets_xml = []
+    for rows in pool.values():
+        out = []
+        for r, cells in enumerate(rows, start=1):
+            cs = []
+            for c, value in enumerate(cells):
+                if value == "":
+                    continue                       # Excel omits empty cells entirely
+                ref = f"{mps.col_letter(c)}{r}"
+                if _re.fullmatch(r"-?\d+(\.\d+)?", value):
+                    cs.append(f'<c r="{ref}"><v>{value}</v></c>')
+                else:
+                    if value not in index:
+                        index[value] = len(strings)
+                        strings.append(value)
+                    cs.append(f'<c r="{ref}" t="s"><v>{index[value]}</v></c>')
+            out.append(f'<row r="{r}">{"".join(cs)}</row>')
+        sheets_xml.append(f'<worksheet xmlns="{MAIN_NS}"><sheetData>{"".join(out)}</sheetData></worksheet>')
+    buf = io.BytesIO()
+    with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+        entries = "".join(f'<sheet name="{_esc(t)}" sheetId="{i}" r:id="rId{i}"/>'
+                          for i, t in enumerate(pool, start=1))
+        zf.writestr("xl/workbook.xml", f'<workbook xmlns="{MAIN_NS}" xmlns:r="r"><sheets>{entries}'
+                                       '</sheets></workbook>')
+        rels = "".join(f'<Relationship Id="rId{i}" Target="worksheets/sheet{i}.xml"/>'
+                       for i in range(1, len(pool) + 1))
+        zf.writestr("xl/_rels/workbook.xml.rels", f"<Relationships>{rels}</Relationships>")
+        for i, xml in enumerate(sheets_xml, start=1):
+            zf.writestr(f"xl/worksheets/sheet{i}.xml", xml)
+        sst = "".join(f'<si><t xml:space="preserve">{_esc(s)}</t></si>' for s in strings)
+        zf.writestr("xl/sharedStrings.xml", f'<sst xmlns="{MAIN_NS}">{sst}</sst>')
+    return buf.getvalue()
+
+
+def write_xlsx(tmp_path, pool, name="pool.xlsx") -> Path:
+    path = tmp_path / name
+    path.write_bytes(xlsx_from_pool(pool))
+    return path
+
+
+def test_xlsx_from_pool_round_trips_through_the_generators_reader():
+    pool = {"nfl_week_3_2026_pickem": [HEADER, ["3", "", "ATL@GB", "GB", "-5.5"]]}
+    assert mps.load_sheets(xlsx_from_pool(pool)) == pool
+
+
+def _pick_row(week, matchup, ats, picks, extra=()):
+    away, home = matchup.split("@")
+    return [str(week), "2026-09-13 13:00 ET", matchup, home, "-3.5", "DraftKings", "", ats, *picks, *extra]
+
+
+SIX = ["Ann - The Alpha", "Bo - The Bravo", "Cy - The Charlie", "Di - The Delta", "Ed - The Echo",
+       "Flo - The Foxtrot"]
+
+
+def _six_header(record):
+    return FIXED + [f"{n} ({record})" for n in SIX]
+
+
+def six_player_pool():
+    """Weeks 1-3 of 2026 (graded, messy, partly ungraded), a stale 2025 tab, a
+    non-week tab, and notes past column N in the latest tab, which the Sheets
+    API read (A1:N) never sees."""
+    return {
+        "Standings": [["player", "wins"], ["Ann", "3"]],
+        "nfl_week_18_2025_pickem": [_six_header("100-100"), _pick_row(18, "NE@SEA", "SEA", ["SEA"] * 6)],
+        "nfl_week_1_2026_pickem": [
+            _six_header("100-100"),
+            _pick_row(1, "NE@SEA", "NE", ["NE", "Ne ", "SEA", "", "ne", "SEA"]),
+            _pick_row(1, "WAS@PHI", "WAS", ["WSH", "PHI", "was", "WAS", "", "PHI"]),
+            _pick_row(1, "DEN@KC", "PUSH", ["KC", "", "DEN", "KC", "KC", "DEN"]),
+            _pick_row(1, "NYJ@TEN", "TEN", ["NY", "TEN", "dale", "TEN", "TEN", ""]),
+        ],
+        "nfl_week_2_2026_pickem": [
+            _six_header("0-0"),
+            _pick_row(2, "DET@BUF", "BUF", ["BUF", "DET", "buf", "BUF", "DET", "BUF"]),
+            _pick_row(2, "CAR@ATL", "", ["ATL", "CAR", "atl", "", "", ""]),
+        ],
+        "nfl_week_3_2026_pickem": [
+            _six_header("9-9") + ["", "notes"],
+            _pick_row(3, "ATL@GB", "GB", ["GB", "GB", "ATL", "GB", "ATL", "GB"], extra=["", "n/a"]),
+        ],
+    }
+
+
+def api_values(pool):
+    """What values:batchGet returns for A1:N: at most 14 columns, trailing blanks dropped."""
+    out = {}
+    for title, rows in pool.items():
+        sliced = []
+        for r in rows:
+            r = list(r[:14])
+            while r and r[-1] == "":
+                r.pop()
+            sliced.append(r)
+        out[title] = sliced
+    return out
+
+
+IND_WSH = {"id": "e2", "sport_key": "americanfootball_nfl", "sport_title": "NFL",
+           "commence_time": "2026-10-04T17:00:00Z",
+           "home_team": "Washington Commanders", "away_team": "Indianapolis Colts"}
+IND_WSH_ODDS = {**IND_WSH, "bookmakers": [{
+    "key": "fanduel", "title": "FanDuel", "last_update": "2026-09-30T12:00:00Z",
+    "markets": [{"key": "spreads", "outcomes": [
+        {"name": "Indianapolis Colts", "price": -110, "point": 3},
+        {"name": "Washington Commanders", "price": -110, "point": -3}]}]}]}
+JAX_CIN = {"id": "e3", "sport_key": "americanfootball_nfl", "sport_title": "NFL",
+           "commence_time": "2026-10-04T17:00:00Z",
+           "home_team": "Cincinnati Bengals", "away_team": "Jacksonville Jaguars"}
+
+
+@pytest.fixture
+def week4_api(monkeypatch):
+    """Wednesday 2026-09-30 06:00 ET (week 4): a half-point line, a whole-number
+    line from the second-choice book, and a game with no odds yet."""
+    api = FakeOddsAPI([IND_WSH, PIT_CLE, JAX_CIN], [IND_WSH_ODDS, PIT_CLE_ODDS])
+    monkeypatch.setattr(mps.urllib.request, "urlopen", api.urlopen)
+    monkeypatch.setattr(mps, "now_et", lambda: datetime(2026, 9, 30, 6, 0, tzinfo=mps.ET_ZONE))
+    for var in (mps.ENV_SHEET_URL, mps.ENV_BOOKMAKERS, mps.ENV_SEASON_START):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv(mps.ENV_ODDS_KEY, API_KEY)
+    mps._ODDS_CACHE.clear()
+    yield api
+    mps._ODDS_CACHE.clear()
+
+
+def _push_values(pool):
+    session = FakeSession(list(pool), values=api_values(pool))
+    assert run([], session) == 0
+    (_, url, body), = session.writes()
+    return url, body["values"]
+
+
+def test_workbook_csv_equals_what_the_push_writes(week4_api, tmp_path, capsys):
+    """The watchdog's fallback (generator CLI on an exported .xlsx, no --week)
+    produces exactly the cells the push would write for the same pool and slate."""
+    pool = six_player_pool()
+    url, pushed = _push_values(pool)
+    assert "'nfl_week_4_2026_pickem'!A1:N4" in url
+    capsys.readouterr()
+
+    mps._ODDS_CACHE.clear()
+    out = tmp_path / "week.csv"
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", str(out)]) == 0
+    with out.open(newline="") as fh:
+        written = list(_csv.reader(fh))
+
+    assert written == [[str(c) for c in row] for row in pushed]
+    assert all(len(r) == 14 for r in written)
+    assert written[0][8:] == ["Ann - The Alpha (4-1)", "Bo - The Bravo (3-2; 1 missed)",
+                              "Cy - The Charlie (2-2)", "Di - The Delta (4-0; 1 missed)",
+                              "Ed - The Echo (2-2; 1 missed)", "Flo - The Foxtrot (2-2; 1 missed)"]
+    assert [r[2] for r in written[1:]] == ["PIT@CLE", "IND@WSH", "JAX@CIN"]
+    assert [r[0] for r in written[1:]] == ["4", "4", "4"]
+    assert [r[4] for r in written[1:]] == ["-3.5", "-3", ""]
+    err = capsys.readouterr().err
+    assert "tab_name: nfl_week_4_2026_pickem" in err.splitlines()
+    assert API_KEY not in err
+
+
+def test_workbook_csv_to_stdout_matches_push_too(week4_api, tmp_path, capsys):
+    pool = six_player_pool()
+    _, pushed = _push_values(pool)
+    capsys.readouterr()
+    mps._ODDS_CACHE.clear()
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", "-"]) == 0
+    captured = capsys.readouterr()
+    assert list(_csv.reader(io.StringIO(captured.out))) == [[str(c) for c in r] for r in pushed]
+
+
+def test_generator_tab_name_follows_the_pools_pattern(week4_api, tmp_path, capsys):
+    pool = {"Standings": [["x"]], "Week 3": six_player_pool()["nfl_week_3_2026_pickem"]}
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", str(tmp_path / "o.csv")]) == 0
+    assert "tab_name: Week 4" in capsys.readouterr().err.splitlines()
+
+
+def test_generator_workbook_refuses_what_the_push_refuses(week4_api, tmp_path, capsys):
+    pool = six_player_pool()
+    pool["nfl_week_3_2026_pickem"][0][9] = "=HYPERLINK(1)"
+    out = tmp_path / "o.csv"
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "J1" in err and "HYPERLINK" not in err
+    assert not out.exists()
+
+
+def test_generator_workbook_without_a_pickem_tab_fails_unless_allowed(week4_api, tmp_path, capsys):
+    path = write_xlsx(tmp_path, {"Sheet1": [["notes"]]})
+    out = tmp_path / "o.csv"
+    assert mps.main(["--workbook", str(path), "--out", str(out)]) == 1
+    assert "header_fallback" in capsys.readouterr().err and not out.exists()
+    mps._ODDS_CACHE.clear()
+    assert mps.main(["--workbook", str(path), "--out", str(out), "--allow-header-fallback"]) == 0
+    with out.open(newline="") as fh:
+        assert next(_csv.reader(fh))[8:] == [f"player_{i}" for i in range(1, 7)]
+
+
+# --- --check-tab --------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_build(monkeypatch):
+    """--check-tab must never build the sheet (no Odds API credit)."""
+    def boom(*args, **kwargs):
+        raise AssertionError("--check-tab must not build the sheet")
+    monkeypatch.setattr(mps, "build_sheet", boom)
+    monkeypatch.setattr(mps, "fetch_week_slate", boom)
+
+
+SHEET_ONLY = {"PICKEM_SPREADSHEET_ID": SHEET_ID}      # no ODDS_API_KEY: not needed
+
+
+def test_check_tab_reports_existing_tab_and_exits_0(no_build, monkeypatch, capsys):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)            # Wednesday noon ET, week 8
+    session = FakeSession(["nfl_week_7_2026_pickem", "nfl_week_8_2026_pickem"])
+    assert run(["--check-tab"], session, env=SHEET_ONLY) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "week 8 2026: tab exists\n"
+    assert captured.err == ""
+
+
+def test_check_tab_reports_missing_tab_with_its_name_and_exits_4(no_build, monkeypatch, capsys):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    session = FakeSession(["Sheet1", "nfl_week_6_2026_pickem", "nfl_week_7_2026_pickem"])
+    assert run(["--check-tab"], session, env=SHEET_ONLY) == push.EXIT_MISSING == 4
+    assert capsys.readouterr().out == "week 8 2026: tab missing (would be named nfl_week_8_2026_pickem)\n"
+
+
+def test_check_tab_reads_only_tab_metadata(no_build, monkeypatch, capsys):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    session = FakeSession(["nfl_week_7_2026_pickem"])
+    assert run(["--check-tab"], session, env=SHEET_ONLY) == 4
+    assert len(session.calls) == 1
+    method, url, _ = session.calls[0]
+    assert method == "GET" and "fields=sheets.properties" in url and "values" not in url
+    captured = capsys.readouterr()
+    assert SHEET_ID not in captured.out + captured.err
+
+
+def test_check_tab_uses_the_same_conflict_rule_as_the_push(no_build, monkeypatch, capsys):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    # Any week-8 tab of the season counts, whatever its naming.
+    assert run(["--check-tab"], FakeSession(["Week 7", "Week 8"]), env=SHEET_ONLY) == 0
+    assert run(["--check-tab"], FakeSession(["Week 7"]), env=SHEET_ONLY) == 4
+    assert capsys.readouterr().out.splitlines()[-1] == "week 8 2026: tab missing (would be named Week 8)"
+    # A leftover yearless tab doesn't belong to a season once tabs carry years.
+    session = FakeSession(["Week 8", "nfl_week_7_2026_pickem"])
+    assert run(["--check-tab"], session, env=SHEET_ONLY) == 4
+    assert push.conflicting_tab(session.tabs, "nfl_week_8_2026_pickem", 8, 2026) is None
+
+
+@pytest.mark.parametrize("now", [(2027, 1, 20, 12, 0), (2027, 7, 14, 12, 0), (2026, 9, 2, 12, 0)])
+def test_check_tab_off_season_exits_0_without_any_call(no_build, monkeypatch, capsys, now):
+    freeze(monkeypatch, *now)
+    session = FakeSession(["nfl_week_18_2026_pickem"])
+    assert run(["--check-tab"], session, env=SHEET_ONLY) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("off-season") and len(out.splitlines()) == 1
+    assert session.calls == []
+
+
+def test_check_tab_explicit_week_and_season(no_build, monkeypatch, capsys):
+    freeze(monkeypatch, 2027, 7, 14, 12, 0)             # off-season, but --week bypasses it
+    session = FakeSession(["nfl_week_18_2026_pickem"])
+    assert run(["--check-tab", "--week", "1", "--season", "2027"], session, env=SHEET_ONLY) == 4
+    assert "week 1 2027: tab missing (would be named nfl_week_1_2027_pickem)" in capsys.readouterr().out
+
+
+def test_check_tab_with_workbook_needs_no_google_or_odds_credentials(no_build, monkeypatch, capsys,
+                                                                    tmp_path):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    have = write_xlsx(tmp_path, {"nfl_week_7_2026_pickem": [HEADER], "nfl_week_8_2026_pickem": [HEADER]},
+                      "have.xlsx")
+    lack = write_xlsx(tmp_path, {"Standings": [["x"]], "nfl_week_7_2026_pickem": [HEADER]}, "lack.xlsx")
+    assert push.main(["--check-tab", "--workbook", str(have)], env={}, session_factory=no_session) == 0
+    assert push.main(["--check-tab", "--workbook", str(lack)], env={}, session_factory=no_session) == 4
+    out = capsys.readouterr().out.splitlines()
+    assert out == ["week 8 2026: tab exists",
+                   "week 8 2026: tab missing (would be named nfl_week_8_2026_pickem)"]
+
+
+def test_check_tab_makes_no_odds_api_request(odds_api, capsys, monkeypatch):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    assert run(["--check-tab"], FakeSession(["nfl_week_7_2026_pickem"])) == 4
+    assert odds_api.requests == []
+    assert "remaining" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv,env", [
+    (["--check-tab"], {}),                                                  # no sheet, no workbook
+    (["--check-tab", "--workbook", "/nonexistent/pool.xlsx"], {}),          # unreadable workbook
+    (["--check-tab", "--season-start", "Sept 10"], SHEET_ONLY),
+    (["--check-tab"], {**SHEET_ONLY, "PICKEM_SEASON_START": "2025-09-04"}),  # stale opener
+    (["--check-tab", "--week", "19"], SHEET_ONLY),
+    (["--check-tab", "--force"], SHEET_ONLY),
+    (["--check-tab", "--dry-run"], SHEET_ONLY),
+])
+def test_check_tab_config_errors_exit_2_before_any_call(no_build, monkeypatch, capsys, argv, env):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    session = FakeSession(["nfl_week_7_2026_pickem"])
+    assert run(argv, session, env=env) == 2
+    assert session.calls == []
+    assert capsys.readouterr().out == ""
+
+
+def test_check_tab_not_a_zip_workbook_is_exit_2(no_build, monkeypatch, tmp_path):
+    freeze(monkeypatch, 2026, 10, 28, 12, 0)
+    bad = tmp_path / "pool.xlsx"
+    bad.write_bytes(b"PK-not-really")
+    assert push.main(["--check-tab", "--workbook", str(bad)], env={}, session_factory=no_session) == 2
+
+
+# --- the watchdog path keeps pool data private -------------------------------------
+
+
+def test_generator_workbook_warnings_hide_names_and_picks_by_default(week4_api, tmp_path, capsys):
+    pool = six_player_pool()
+    pool["nfl_week_3_2026_pickem"][1][8] = "ZZ-RAW-PICK"  # unresolvable pick text
+    path = write_xlsx(tmp_path, pool)
+    assert mps.main(["--workbook", str(path), "--out", str(tmp_path / "o.csv")]) == 0
+    err = capsys.readouterr().err
+    assert "unresolvable picks" in err
+    assert "ZZ-RAW-PICK" not in err and "Ann - The Alpha" not in err
+
+    mps._ODDS_CACHE.clear()
+    assert mps.main(["--workbook", str(path), "--out", str(tmp_path / "o.csv"), "--show-values"]) == 0
+    assert "ZZ-RAW-PICK" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["leak.csv", "scripts/leak.csv"])
+def test_generator_workbook_refuses_to_write_pool_data_inside_the_repo(week4_api, tmp_path, capsys, name):
+    out = Path(mps.__file__).resolve().parents[1] / name
+    path = write_xlsx(tmp_path, six_player_pool())
+    assert mps.main(["--workbook", str(path), "--out", str(out)]) == 2
+    assert "inside the repo" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_generator_default_out_inside_repo_is_refused_with_a_workbook(week4_api, tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(Path(mps.__file__).resolve().parents[1])
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, six_player_pool()))]) == 2
+    assert "inside the repo" in capsys.readouterr().err
+
+
+def test_connector_batch_matches_what_the_push_sends(week4_api, tmp_path, capsys):
+    """End to end: exported workbook -> generator CSV -> pickem_sheet_batch gives the
+    same tab name, template, position and cells as the push's real requests."""
+    import pickem_sheet_batch as batch
+
+    pool = six_player_pool()
+    session = FakeSession(list(pool), values=api_values(pool))
+    assert run([], session) == 0
+    (dup,) = [r["duplicateSheet"] for r in session.structural() if "duplicateSheet" in r]
+    (_, _url, body), = session.writes()
+
+    mps._ODDS_CACHE.clear()
+    out = tmp_path / "week.csv"
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", str(out)]) == 0
+    plan = batch.build_batch(out.read_text(), {"sheets": [{"properties": t} for t in session.tabs]}, 2026)
+
+    bdup = plan["requests"][0]["duplicateSheet"]
+    assert (bdup["sourceSheetId"], bdup["insertSheetIndex"], bdup["newSheetName"]) == (
+        dup["sourceSheetId"], dup["insertSheetIndex"], dup["newSheetName"])
+    cells = [[c.get("userEnteredValue", {}).get("numberValue",
+              c.get("userEnteredValue", {}).get("stringValue", "")) for c in row["values"]]
+             for row in plan["requests"][-1]["updateCells"]["rows"]]
+    assert cells == body["values"]
+
+
+def test_xlsx_tab_names_are_xml_unescaped(tmp_path):
+    pool = {"NFL Week 3 - 2026 & more": six_player_pool()["nfl_week_3_2026_pickem"]}
+    assert list(mps.load_sheets(xlsx_from_pool(pool))) == ["NFL Week 3 - 2026 & more"]

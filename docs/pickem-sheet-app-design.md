@@ -287,7 +287,8 @@ passed through env vars:
 | `--week N` | Week to push (works in the off-season too). Default: resolved from the season opener, so a **Wednesday-morning ET** cron after MNF gets the new week. Thursday through Tuesday, it resolves to the week in progress, whose tab usually exists already (exit 3). |
 | `--season YYYY` | Default: the current NFL season. |
 | `--dry-run` | Build and describe the plan. With credentials, it makes only read-only API calls (list tabs, batch read), and it reports whether the tab already exists. |
-| `--workbook pool.xlsx` | Dry run only: read the pool from a downloaded copy instead of the API. Needs no credentials and no `google-auth`. |
+| `--check-tab` | Only report whether this week's tab exists: one line such as `week 8 2026: tab missing (would be named nfl_week_8_2026_pickem)`. The week and the clash rule are the same as a real run's (off-season included). Reads tab names only (no cell values), needs no `ODDS_API_KEY`, spends no credit. Exit 0 = exists (or off-season), 4 = missing, 2 = config error. |
+| `--workbook pool.xlsx` | With `--dry-run` or `--check-tab`: read the pool from a downloaded copy instead of the API. Needs no credentials and no `google-auth`. |
 | `--show-values` | Print names, warning details, and the rows. For local use only. |
 | `--force` | Clear and rewrite an existing tab for the week. **Destroys entered picks.** |
 | `--allow-header-fallback` | Write placeholder player columns if the sheet has no readable week tab (for a brand-new pool). By default this is fatal. |
@@ -306,9 +307,27 @@ Configuration is validated before any network call. Exit codes: `0` ok (and
 the off-season no-op), `1` build/validation/API failure, `2` configuration
 (missing or bad `PICKEM_SPREADSHEET_ID`, missing or rejected `ODDS_API_KEY`,
 bad `PICKEM_BOOKMAKERS` / `PICKEM_SEASON_START`, no ADC, `google-auth` missing,
-`--workbook` without `--dry-run`), `3` the tab already exists. Warnings are
-printed to stdout. Under GitHub Actions they are also emitted as `::warning`
-annotations.
+`--workbook` without `--dry-run` or `--check-tab`), `3` the tab already exists,
+`4` `--check-tab` found no tab for the week. Warnings are printed to stdout.
+Under GitHub Actions they are also emitted as `::warning` annotations.
+
+**Watchdog fallback (no service account).** A Wednesday-noon routine with the
+Drive connector runs `--check-tab --workbook <export.xlsx>`. On exit 4, it
+runs `make_pickem_sheet.py --workbook <export.xlsx> --out week.csv` with no
+`--week`. Then `pickem_sheet_batch.py` turns the CSV plus fresh tab metadata
+into one `batchUpdate`, naming and placing the tab from the live tab list exactly
+as this script does (the `tab_name:` line is informational; an export can be
+stale). The `working-with-pool-sheet` skill has the steps. The CSV is guaranteed to hold exactly the cells this script
+would write for the same pool and slate: the 14 columns, the `(W-L)` header,
+row order, and the week and spread values. Both paths share the same code.
+The pool is narrowed to the tabs the API read covers (`pool_slice`: this
+season's week tabs plus the latest earlier one, columns A:N only). The cells
+come from `sheet_values`, so whatever the push refuses (formula-like cells,
+anything but 14 columns, `header_fallback` without `--allow-header-fallback`)
+also fails the generator with exit 1. A test builds both from one fake pool
+and one fake slate and asserts they are equal. Unlike the push, the generator
+has no off-season guard (it clamps to week 1 or 18), so run `--check-tab`
+first.
 
 **One-time setup (Edwin):**
 1. In Google Cloud Console, pick or create a project and enable the **Google
