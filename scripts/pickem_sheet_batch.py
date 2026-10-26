@@ -52,7 +52,7 @@ def result_from_csv(text: str, season: int) -> SimpleNamespace:
         raise push.PushError("the CSV is empty")
     header, body = rows[0], rows[1:]
     try:
-        week = int(float(body[0][push.WEEK_COL])) if body else 0
+        week = int(float(body[0][mps.FIXED_COLUMNS.index("week")])) if body else 0
     except (ValueError, IndexError):
         raise push.PushError("cell A2 must be a number") from None
     return SimpleNamespace(header=header, rows=body, week=week, season=season, warnings=[])
