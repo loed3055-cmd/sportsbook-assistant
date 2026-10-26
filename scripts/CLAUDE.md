@@ -37,6 +37,22 @@ only module that imports a Google client; its deps live in
 `requirements/pickem.txt`. Its logs must never contain player names, cell
 values, or the spreadsheet ID.
 
+The Wednesday watchdog (a Claude routine using the Drive connector, without a
+service account) relies on two guarantees. Keep both, and the tests that pin them:
+
+- `push_pickem_to_sheets.py --check-tab` picks the week exactly as a real run
+  does and applies the same clash rule as exit 3 (`conflicting_tab`). It reads
+  tab names only, from Sheets metadata or from `--workbook pool.xlsx` (which
+  needs no Google creds), and makes no Odds API call. It prints one line and
+  exits 0 if the tab exists or in the off-season, 4 if it's missing, and 2 on
+  a config error.
+- `make_pickem_sheet.py --workbook export.xlsx --out week.csv` (no `--week`)
+  writes exactly the cells the push would write: same header with `(W-L)`,
+  same rows and values. It refuses anything the push refuses (exit 1). It also
+  prints `tab_name: <name>` on stderr. Any logic that shapes these cells
+  belongs in the generator's shared code (`pool_slice`, `sheet_values`,
+  `intended_tab_name`), never in only one of the two paths.
+
 Tests: `tests/test_make_pickem_sheet.py` and `tests/test_push_pickem_to_sheets.py`.
 They need no network (The Odds API is a fake `urlopen` with inline fixtures in
 the documented v4 shape), `app`, or google-auth. They run under `make test`, or
