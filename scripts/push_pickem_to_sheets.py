@@ -36,16 +36,21 @@ Needs requirements/pickem.txt (google-auth, requests), except for
 `--dry-run --workbook pool.xlsx`. make_pickem_sheet.py stays stdlib-only; this
 module is the only place that imports a Google client.
 
-Exit codes: 0 ok (including off-season no-op), 1 generation/validation/API
-failure, 2 configuration error (incl. missing or rejected ODDS_API_KEY),
-3 the week's tab already exists (rerun with --force to overwrite).
+--check-tab only reports whether this week's tab exists, deciding the week and
+the clash exactly as a real run does. It reads tab names only (Sheets metadata,
+or the tabs of --workbook pool.xlsx with no Google credentials), never cell
+values, and makes no Odds API call. It prints one line, e.g.
+`week 8 2026: tab missing (would be named nfl_week_8_2026_pickem)`.
+
+Exit codes: 0 ok (including off-season no-op; with --check-tab, the tab
+exists), 1 generation/validation/API failure, 2 configuration error (incl.
+missing or rejected ODDS_API_KEY), 3 the week's tab already exists (rerun with
+--force to overwrite), 4 --check-tab: the week's tab is missing.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import io
 import os
 import re
 import sys
@@ -62,17 +67,16 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 API = "https://sheets.googleapis.com/v4/spreadsheets"
 
 FIXED_COLUMNS = mps.FIXED_COLUMNS
-N_COLUMNS = 14
+N_COLUMNS = mps.N_COLUMNS
 LAST_COL = "N"
-WEEK_COL, SPREAD_COL = 0, 4
 
 # A string cell starting with one of these could be evaluated as a formula by
 # Sheets or by a spreadsheet the data is later exported to. RAW input already
-# stores strings literally; this is defence in depth.
-FORMULA_PREFIXES = ("=", "+", "-", "@", "＝", "＋", "－", "＠")
-CONTROL_PREFIXES = ("\t", "\r", "\n")
+# stores strings literally; this is defence in depth (enforced in mps.sheet_values).
+FORMULA_PREFIXES = mps.PUSH_FORMULA_PREFIXES
+CONTROL_PREFIXES = mps.PUSH_CONTROL_PREFIXES
 
-EXIT_OK, EXIT_FAIL, EXIT_CONFIG, EXIT_EXISTS = 0, 1, 2, 3
+EXIT_OK, EXIT_FAIL, EXIT_CONFIG, EXIT_EXISTS, EXIT_MISSING = 0, 1, 2, 3, 4
 
 
 class PushError(Exception):
@@ -234,10 +238,7 @@ def a1(title: str, cells: str) -> str:
 
 def pool_titles(tabs: list[dict], season: int) -> list[str]:
     """Week tabs worth reading: all of `season`'s, plus the latest earlier one (week 1 headers)."""
-    keyed = [(k, title) for title, k in mps.week_tab_keys([t["title"] for t in tabs], season).items()]
-    this_season = [title for k, title in keyed if k[0] == season]
-    earlier = sorted((k, title) for k, title in keyed if k[0] < season)
-    return this_season + ([earlier[-1][1]] if earlier else [])
+    return mps.pool_tab_titles([t["title"] for t in tabs], season)
 
 
 def conflicting_tab(tabs: list[dict], title: str, week: int, season: int) -> dict | None:
@@ -263,58 +264,15 @@ def template_tab(tabs: list[dict], week: int, season: int) -> dict | None:
 # --- validation / output ------------------------------------------------------
 
 
-def _number(text: str, cell: str, integer: bool):
-    try:
-        value = float(text)
-    except (TypeError, ValueError):
-        raise PushError(f"cell {cell} must be a number") from None
-    if integer:
-        if not value.is_integer():
-            raise PushError(f"cell {cell} must be a whole number")
-        return int(value)
-    return int(value) if value.is_integer() else value
-
-
 def validate(result: mps.SheetResult, allow_header_fallback: bool) -> list[list]:
-    """The rows to write, typed for RAW input. Errors cite positions, never values."""
-    header = result.header
-    if len(header) != N_COLUMNS:
-        raise PushError(f"header must have the pool's {N_COLUMNS} columns; got {len(header)}")
-    wrong = [mps.col_letter(i) for i, (got, want) in enumerate(zip(header, FIXED_COLUMNS)) if got != want]
-    if wrong:
-        raise PushError(f"header columns {', '.join(wrong)} are not the pool's fixed columns "
-                        f"({', '.join(FIXED_COLUMNS)})")
-    blank = [mps.col_letter(i) for i in range(8, N_COLUMNS) if not str(header[i]).strip()]
-    if blank:
-        raise PushError(f"player header cell(s) {', '.join(c + '1' for c in blank)} are blank")
-    if not result.rows:
-        raise PushError(f"week {result.week} has no games")
+    """The rows to write, typed for RAW input. Errors cite positions, never values.
 
-    typed: list[list] = [list(header)]
-    for r, row in enumerate(result.rows, start=2):
-        if len(row) != N_COLUMNS:
-            raise PushError(f"row {r} has {len(row)} columns, expected {N_COLUMNS}")
-        out = list(row)
-        out[WEEK_COL] = _number(row[WEEK_COL], f"A{r}", integer=True)
-        if out[WEEK_COL] != result.week:
-            raise PushError(f"row {r} is not for week {result.week}")
-        spread = str(row[SPREAD_COL]).strip()
-        out[SPREAD_COL] = _number(spread, f"E{r}", integer=False) if spread else ""
-        typed.append(out)
-
-    for r, row in enumerate(typed, start=1):
-        for c, cell in enumerate(row):
-            if isinstance(cell, str) and (cell.startswith(CONTROL_PREFIXES)
-                                          or cell.lstrip().startswith(FORMULA_PREFIXES)):
-                raise PushError(f"cell {mps.col_letter(c)}{r} starts with a formula or control "
-                                "character; refusing to write it")
-
-    if not allow_header_fallback and any(w["kind"] == "header_fallback" for w in result.warnings):
-        raise PushError(
-            "header_fallback: player names could not be read from the pool sheet, so placeholder "
-            "columns would be written. Fix the sheet, or pass --allow-header-fallback."
-        )
-    return typed
+    The rules live in mps.sheet_values, which the generator CLI's --workbook
+    mode also uses, so its CSV is exactly what this script writes."""
+    try:
+        return mps.sheet_values(result, allow_header_fallback)
+    except mps.ValidationError as exc:
+        raise PushError(str(exc)) from None
 
 
 def print_warnings(result: mps.SheetResult, env: Mapping[str, str], show_values: bool) -> None:
@@ -331,10 +289,7 @@ def print_warnings(result: mps.SheetResult, env: Mapping[str, str], show_values:
             print(f"::warning title=pickem {w['kind']}::{line}")
 
 
-def to_csv(values: list[list]) -> str:
-    buf = io.StringIO()
-    csv.writer(buf).writerows(values)
-    return buf.getvalue()
+to_csv = mps.values_csv
 
 
 # --- push ---------------------------------------------------------------------
@@ -395,6 +350,63 @@ def push(client: SheetsClient, values: list[list], title: str, week: int, season
 # --- CLI ----------------------------------------------------------------------
 
 
+def run_week(week: int | None, season: int, opener, now) -> int | None:
+    """The week a run targets: `week` if given, else the current week from the
+    season opener. None (after printing the off-season line) in the off-season."""
+    if week is not None:
+        return week
+    week = mps.season_week(opener, now)
+    if week is None:
+        print(f"off-season: nothing to create (season {season}, opening day "
+              f"{opener.isoformat()}; pass --week to force one)")
+    return week
+
+
+def check_tab(args, env: Mapping[str, str], session_factory: Callable[[], object]) -> int:
+    """--check-tab: does this week's tab exist? Same week and same conflict rule
+    as a real run. Reads tab names only (Sheets metadata, or the --workbook
+    file); no cell values, no Odds API call. Prints one line."""
+    if args.force or args.dry_run:
+        raise PushError("--check-tab only reads; don't combine it with --force or --dry-run", EXIT_CONFIG)
+    now = mps.now_et()
+    season = args.season or mps.current_season(now)
+    sheet_id = None if args.workbook else load_config(env)
+    try:
+        opener = mps.season_opener(season, args.season_start, env=env)
+    except mps.ConfigError as exc:
+        raise PushError(str(exc), EXIT_CONFIG) from None
+
+    week = run_week(args.week, season, opener, now)
+    if week is None:
+        return EXIT_OK
+    if args.week is None and args.schedule:
+        try:  # a real run lets the schedule file decide, through the same function
+            week = mps.upcoming_week(mps.load_sheets(args.schedule), now)
+        except mps.SheetError as exc:
+            raise PushError(f"could not read --schedule: {exc}", EXIT_CONFIG) from None
+    if not 1 <= week <= mps.N_WEEKS:
+        raise PushError(f"week must be between 1 and {mps.N_WEEKS}, got {week}", EXIT_CONFIG)
+
+    if args.workbook:
+        try:
+            titles = list(mps.load_sheets(args.workbook.read_bytes()))
+        except OSError as exc:
+            raise PushError(f"could not read --workbook ({type(exc).__name__})", EXIT_CONFIG) from None
+        except mps.SheetError as exc:
+            raise PushError(f"could not read --workbook: {exc}", EXIT_CONFIG) from None
+        tabs = [{"title": t} for t in titles]
+    else:
+        tabs = SheetsClient(session_factory(), sheet_id, show_values=args.show_values).tabs()
+        titles = [t["title"] for t in tabs]
+
+    title = mps.intended_tab_name(titles, week, season)
+    if conflicting_tab(tabs, title, week, season) is not None:
+        print(f"week {week} {season}: tab exists")
+        return EXIT_OK
+    print(f"week {week} {season}: tab missing (would be named {title})")
+    return EXIT_MISSING
+
+
 def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None,
          session_factory: Callable[[], object] | None = None) -> int:
     env = os.environ if env is None else env
@@ -422,12 +434,17 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None,
                    help="clear and rewrite the week's tab if it already exists (destroys entered picks)")
     p.add_argument("--allow-header-fallback", action="store_true",
                    help="write placeholder player columns if names can't be read from the sheet")
+    p.add_argument("--check-tab", action="store_true",
+                   help="only report whether this week's tab exists (exit 0) or not (exit 4); reads "
+                        "tab names only (or --workbook's), no Odds API call")
     args = p.parse_args(argv)
 
     try:
+        if args.check_tab:
+            return check_tab(args, env, session_factory)
         if args.workbook and not args.dry_run:
-            raise PushError("--workbook is only for --dry-run; real runs read the sheet through the API",
-                            EXIT_CONFIG)
+            raise PushError("--workbook is only for --dry-run or --check-tab; real runs read the "
+                            "sheet through the API", EXIT_CONFIG)
         now = mps.now_et()
         season = args.season or mps.current_season(now)
 
@@ -440,15 +457,11 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None,
         except mps.ConfigError as exc:
             raise PushError(str(exc), EXIT_CONFIG) from None
 
-        week = args.week
+        week = run_week(args.week, season, opener, now)
         if week is None:
-            week = mps.season_week(opener, now)
-            if week is None:
-                print(f"off-season: nothing to create (season {season}, opening day "
-                      f"{opener.isoformat()}; pass --week to force one)")
-                return EXIT_OK
-            if args.schedule:
-                week = None  # the schedule file decides, as before
+            return EXIT_OK
+        if args.week is None and args.schedule:
+            week = None  # the schedule file decides, as before
 
         client, tabs, pool, workbook, titles = None, None, None, None, []
         if args.workbook:
@@ -477,7 +490,7 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None,
 
         print_warnings(result, env, args.show_values)
         values = validate(result, args.allow_header_fallback)
-        title = tab_name(result.week, result.season, mps.detect_tab_pattern(titles))
+        title = mps.intended_tab_name(titles, result.week, result.season)
 
         if args.dry_run:
             exists = conflicting_tab(tabs, title, result.week, result.season) if tabs is not None else None

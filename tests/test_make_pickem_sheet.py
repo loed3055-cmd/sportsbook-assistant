@@ -246,6 +246,34 @@ def test_week_one_carries_the_latest_header_through():
     assert "carried" in source
 
 
+def test_pool_header_ignores_columns_past_n_like_the_sheets_api_read():
+    """The push reads A1:N; an xlsx carries every column. Notes in column O/P
+    must not become players in either."""
+    pool = pool_fixture()
+    header = FIXED + ["Ann - The Alpha (9-9)", "Bo - The Bravo (9-9)", "Cy - The Charlie (9-9)",
+                      "Di (0-0)", "Ed (0-0)", "Flo (0-0)", "", "notes"]
+    pool["nfl_week_3_2026_pickem"] = [header]
+    got, _, _ = mps.pool_header(pool, season=2026, week=4)
+    assert len(got) == 14
+    assert got[8:11] == ["Ann - The Alpha (3-1)", "Bo - The Bravo (2-2; 1 missed)", "Cy - The Charlie (2-1)"]
+
+
+def test_pool_tab_titles_are_this_season_plus_the_latest_earlier_one():
+    titles = ["Sheet1", "nfl_week_17_2025_pickem", "nfl_week_18_2025_pickem", "nfl_week_1_2026_pickem",
+              "nfl_week_1_2027_pickem"]
+    assert mps.pool_tab_titles(titles, 2026) == ["nfl_week_1_2026_pickem", "nfl_week_18_2025_pickem"]
+
+
+def test_pool_header_only_uses_the_tabs_the_push_reads():
+    """A later season's tab, or an older earlier-season one, is not read by the
+    push, so it must not shape the header from an xlsx either."""
+    stale = [FIXED + ["Old (1-1)", "Older (1-1)", "Oldest (1-1)"]]
+    pool = {"nfl_week_17_2025_pickem": stale, "nfl_week_18_2025_pickem": [["notes"]],
+            "nfl_week_1_2027_pickem": stale}
+    with pytest.raises(mps.SheetError):
+        mps.pool_header(pool, season=2026, week=1)
+
+
 def test_pool_header_without_any_pickem_tab_raises():
     with pytest.raises(mps.SheetError):
         mps.pool_header({"Sheet1": [["a", "b"]]}, season=2026, week=4)
