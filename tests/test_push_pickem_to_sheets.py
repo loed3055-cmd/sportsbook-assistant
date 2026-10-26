@@ -1145,3 +1145,33 @@ def test_generator_default_out_inside_repo_is_refused_with_a_workbook(week4_api,
     monkeypatch.chdir(Path(mps.__file__).resolve().parents[1])
     assert mps.main(["--workbook", str(write_xlsx(tmp_path, six_player_pool()))]) == 2
     assert "inside the repo" in capsys.readouterr().err
+
+
+def test_connector_batch_matches_what_the_push_sends(week4_api, tmp_path, capsys):
+    """End to end: exported workbook -> generator CSV -> pickem_sheet_batch gives the
+    same tab name, template, position and cells as the push's real requests."""
+    import pickem_sheet_batch as batch
+
+    pool = six_player_pool()
+    session = FakeSession(list(pool), values=api_values(pool))
+    assert run([], session) == 0
+    (dup,) = [r["duplicateSheet"] for r in session.structural() if "duplicateSheet" in r]
+    (_, _url, body), = session.writes()
+
+    mps._ODDS_CACHE.clear()
+    out = tmp_path / "week.csv"
+    assert mps.main(["--workbook", str(write_xlsx(tmp_path, pool)), "--out", str(out)]) == 0
+    plan = batch.build_batch(out.read_text(), {"sheets": [{"properties": t} for t in session.tabs]}, 2026)
+
+    bdup = plan["requests"][0]["duplicateSheet"]
+    assert (bdup["sourceSheetId"], bdup["insertSheetIndex"], bdup["newSheetName"]) == (
+        dup["sourceSheetId"], dup["insertSheetIndex"], dup["newSheetName"])
+    cells = [[c.get("userEnteredValue", {}).get("numberValue",
+              c.get("userEnteredValue", {}).get("stringValue", "")) for c in row["values"]]
+             for row in plan["requests"][-1]["updateCells"]["rows"]]
+    assert cells == body["values"]
+
+
+def test_xlsx_tab_names_are_xml_unescaped(tmp_path):
+    pool = {"NFL Week 3 - 2026 & more": six_player_pool()["nfl_week_3_2026_pickem"]}
+    assert list(mps.load_sheets(xlsx_from_pool(pool))) == ["NFL Week 3 - 2026 & more"]

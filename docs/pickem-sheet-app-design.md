@@ -314,8 +314,10 @@ Under GitHub Actions they are also emitted as `::warning` annotations.
 **Watchdog fallback (no service account).** A Wednesday-noon routine with the
 Drive connector runs `--check-tab --workbook <export.xlsx>`. On exit 4, it
 runs `make_pickem_sheet.py --workbook <export.xlsx> --out week.csv` with no
-`--week`, and writes the CSV into a new tab named after the `tab_name: …`
-line on stderr. The CSV is guaranteed to hold exactly the cells this script
+`--week`. Then `pickem_sheet_batch.py` turns the CSV plus fresh tab metadata
+into one `batchUpdate`, naming and placing the tab from the live tab list exactly
+as this script does (the `tab_name:` line is informational; an export can be
+stale). The `working-with-pool-sheet` skill has the steps. The CSV is guaranteed to hold exactly the cells this script
 would write for the same pool and slate: the 14 columns, the `(W-L)` header,
 row order, and the week and spread values. Both paths share the same code.
 The pool is narrowed to the tabs the API read covers (`pool_slice`: this

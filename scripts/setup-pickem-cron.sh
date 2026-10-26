@@ -466,9 +466,11 @@ pull_request
   esac
   prot="$(ghq api "repos/$REPO/branches/main/protection" --jq '.required_pull_request_reviews != null')" || prot=""
   if [ "$prot" = "true" ]; then ok "main is protected" "branch protection requires reviews"; return; fi
-  missing "main is protected" "nothing requires a pull request, so anyone with push access could change the workflow and use the pickem secrets"
+  # Not created here, but setup isn't done without it: fails check and apply alike.
+  echo "✗ main is protected: nothing requires a pull request, so anyone with push access could change the workflow and use the pickem secrets"
   echo "    fix by hand (admin): Settings > Rules > Rulesets > New branch ruleset: target main,"
   echo "    require a pull request (1 approval), block force pushes"
+  if [ "$MODE" != "dry-run" ]; then RC=1; fi
 }
 
 step_secret_odds() {
@@ -576,6 +578,8 @@ fi
 if [ "$MODE" != "check" ]; then
   cat <<EOF
 Still manual (docs/pickem-setup.md):
+  - Protect main with a ruleset (admin): require a pull request (1 approval) and block
+    force pushes. Until then, --check reports "✗ main is protected".
   - Share the pool sheet, and only that sheet, with $SA_EMAIL as Editor
     (untick "Notify people", then untick "Editors can change permissions and share").
   - Add the responsible-gambling note to the template tab, outside A-N (e.g. P1).

@@ -343,7 +343,8 @@ def test_check_without_gcloud_reports_unknown(env):
 
 def test_apply_from_scratch_creates_everything_and_keeps_secrets_off_argv(env):
     result = run(env, "--yes", "--from-stdin", stdin=f"{ODDS_KEY}\n{SHEET_ID}\n")
-    assert result.returncode == 0, result.stdout + result.stderr
+    # Everything is created, but apply still fails until main is protected (by hand).
+    assert result.returncode == 1, result.stdout + result.stderr
 
     calls = argv_lines(env)
     joined = "\n".join(calls)
@@ -385,6 +386,7 @@ def test_apply_skips_existing_resources(env):
 
 
 def test_apply_is_idempotent(env):
+    (Path(env["FAKE_STATE"]) / "main_rules").write_text("pull_request\n")  # admin's ruleset
     first = run(env, "--yes", "--from-stdin", stdin=f"{ODDS_KEY}\n{SHEET_ID}\n")
     assert first.returncode == 0, first.stdout + first.stderr
     Path(env["FAKE_LOG"]).unlink()

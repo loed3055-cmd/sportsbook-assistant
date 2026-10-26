@@ -67,6 +67,12 @@ def tabs_from_meta(meta: dict) -> list[dict]:
             raise ValueError("every sheet needs properties.title")
         tabs.append({"title": props["title"], "sheetId": int(props.get("sheetId", 0)),
                      "index": int(props.get("index", position))})
+    # JSON may omit a zero sheetId, and only one tab can have id 0. More than one
+    # missing means the metadata is incomplete; don't guess which tab is which.
+    missing = sum(1 for sheet in meta.get("sheets") or []
+                  if "sheetId" not in ((sheet.get("properties")) or {}))
+    if missing > 1:
+        raise ValueError(f"sheetId missing for {missing} tabs; re-read with fields [\"sheets.properties\"]")
     return tabs
 
 

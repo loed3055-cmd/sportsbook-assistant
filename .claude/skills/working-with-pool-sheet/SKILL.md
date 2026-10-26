@@ -36,12 +36,17 @@ never search Drive. Interactively, if it's unset, Drive search
 
 ## Add the missing week tab (connector path)
 
+**Which week.** With no `--week`, the scripts use the week in progress, which rolls over
+**Wednesday 03:00 ET**. The Wednesday watchdog needs nothing else. For an early run (e.g.
+Tuesday, for the coming week) or a catch-up, pass the same `--week N` to steps 2 and 3. Step 4
+reads the week from the CSV.
+
 1. **Download:** Drive `download_file_content`, with `exportMimeType`
    `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, saved to `"$S/pool.xlsx"`.
-2. **Is it missing?** `python3 scripts/push_pickem_to_sheets.py --check-tab --workbook "$S/pool.xlsx"`.
+2. **Is it missing?** `python3 scripts/push_pickem_to_sheets.py --check-tab --workbook "$S/pool.xlsx" [--week N]`.
    Exit 0: the tab exists or it's the off-season, so stop. Exit 4: missing, so continue. Any other
    exit: stop and report it.
-3. **Build:** `python3 scripts/make_pickem_sheet.py --workbook "$S/pool.xlsx" --out "$S/week.csv"`
+3. **Build:** `python3 scripts/make_pickem_sheet.py --workbook "$S/pool.xlsx" --out "$S/week.csv" [--week N]`
    (Odds API key from env or Keychain; 1 credit). Any non-zero exit: stop and report it.
 4. **Fresh metadata, then batch:** Sheets `get_spreadsheet` with `fields: ["sheets.properties"]`
    **now** (the cron may have just run), saved to `"$S/meta.json"`. Then
@@ -50,8 +55,9 @@ never search Drive. Interactively, if it's unset, Drive search
 5. **Write once:** send `batch.json`'s `requests` in a single `update_spreadsheet` call. Never
    `update_values`/`update_formulas` (they parse kickoff times into dates and skip the guards),
    never `--force`, and no other write.
-6. **Verify:** `get_spreadsheet` again. The new tab (the batch's `tab`) sits right after the
-   previous week. Its row count matches the batch's `rows`, and the previous week's tab is still there.
+6. **Verify:** `get_spreadsheet` again. A tab titled the batch's `tab`, with sheetId
+   `newSheetId`, sits right after the template tab, and every earlier tab is still there.
+   (Grid size isn't the game count, and reading cells is off-limits, so this is the whole check.)
 7. **Clean up:** `rm -rf "$S"`.
 
 Report only: tab created / tab exists / failed with the exit code, plus the tab name and the game count.

@@ -38,6 +38,7 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import unescape as xml_unescape
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -239,7 +240,8 @@ def load_sheets(source: Path | bytes) -> dict[str, list[list[str]]]:
                 cells[_col_index(ref) if ref else len(cells)] = value
             width = max(cells) + 1 if cells else 0
             rows.append([cells.get(i, "") for i in range(width)])
-        sheets[name_m.group(1)] = rows
+        # The name is an XML attribute: "&amp;" in the file is "&" in the sheet.
+        sheets[xml_unescape(name_m.group(1), {"&quot;": '"', "&apos;": "'"})] = rows
     return sheets
 
 

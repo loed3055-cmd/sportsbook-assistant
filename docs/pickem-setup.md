@@ -212,6 +212,15 @@ opens, the script prints `off-season: nothing to create` and exits 0. For the
 bookmaker preference and season-start overrides, see
 `docs/pickem-sheet-app-design.md`.
 
+### 5b. Protect `main` (admin)
+
+The WIF condition and the main-only environment trust whatever is on `main`. Without
+protection, anyone with push access could change the workflow and use the `pickem`
+secrets. In the repo: **Settings → Rules → Rulesets → New branch ruleset**, target
+`main`, then turn on **Require a pull request before merging** (1 approval) and
+**Block force pushes**. `scripts/setup-pickem-cron.sh --check` reports
+`✗ main is protected` until this is done.
+
 ## 6. First run
 
 The workflow file must be on `main` of `${GITHUB_REPO}` first. That means a

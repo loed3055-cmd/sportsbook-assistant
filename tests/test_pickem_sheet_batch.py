@@ -204,3 +204,10 @@ def test_placeholder_header_is_refused():
     header = list(mps.FIXED_COLUMNS) + [f"player_{i}" for i in range(1, 7)]
     with pytest.raises(push.PushError, match="header_fallback"):
         _build(_csv(header=header))
+
+
+def test_meta_without_a_sheet_id_is_an_input_error():
+    meta = {"sheets": [{"properties": {"title": "nfl_week_6_2026_pickem", "index": 0}},
+                       {"properties": {"title": "rules"}}]}
+    with pytest.raises(ValueError, match="sheetId"):
+        _build(meta=meta)
