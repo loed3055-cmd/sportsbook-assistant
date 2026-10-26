@@ -1,0 +1,21 @@
+# Build context for infra/docker/*: keep host venvs, VCS data and secrets out.
+.git
+.venv
+**/__pycache__
+**/*.egg-info
+*.env
+**/.env
+**/.env.*
+# Credentials must never enter an image layer (root and any depth).
+secrets
+**/secrets
+gha-creds-*.json
+**/gha-creds-*.json
+*service-account*.json
+**/*service-account*.json
+*.pem
+**/*.pem
+
+# pool data (names, picks)
+examples
+**/examples

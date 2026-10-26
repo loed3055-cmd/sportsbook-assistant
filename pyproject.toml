@@ -3,18 +3,62 @@ name = "sportsbook-assistant"
 version = "0.1.0"
 description = "MVP Sportsbook odds aggregator with FastAPI + Postgres"
 authors = [
-    { name = "Edwin Lobo", email = "loed3055@gmail.com" }
+    { name = "Edwin Lobo", email = "8344260+loobo07@users.noreply.github.com" }
 ]
 requires-python = ">=3.11"
 
+# Single source of truth for dependencies (SSDF PW.4). Exact versions live in
+# uv.lock; requirements/{base,test,dev,prod}.txt are `make lock` exports of it.
+# Floors below known advisories: python-multipart, requests, pydantic, starlette.
 dependencies = [
-    "fastapi>=0.115.0",
+    # 0.134.0+ drops the starlette upper cap; no fastapi release itself requires
+    # starlette>=1.3.1, so that floor is declared directly below.
+    "fastapi>=0.134.0",
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.30.0",
     "sqlalchemy>=2.0.0",
     "psycopg[binary]>=3.1.0",
     "alembic>=1.13.0",
-    "pydantic>=2.0.0",
+    "pydantic>=2.4",
+    "pandas>=2.0.0",
+    "apscheduler>=3.10.0",
+    "python-multipart>=0.0.31",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "requests-mock>=1.12",
+    "httpx>=0.27",
+    "requests>=2.33.0",
+]
+dev = [
+    "sportsbook-assistant[test]",
+    "black>=24.0",
+    "ruff>=0.5",
+    "ipython>=8.0",
+]
+prod = [
+    "gunicorn>=23.0",
+]
+# scripts/push_pickem_to_sheets.py only; mirrored by requirements/pickem.txt
+# for the standalone venv in docs/pickem-sheet-app-design.md.
+pickem = [
+    "google-auth>=2.58,<3",
+    "requests>=2.33.0,<3",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# Only ship the app package; src/alembic is migration scripts, not a package,
+# and would otherwise shadow the real `alembic` library on install.
+where = ["src"]
+include = ["app*"]
+
 [tool.uv]
-# settings for uv (if you want to configure extras later)
+required-version = ">=0.8.22"

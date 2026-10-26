@@ -2,22 +2,84 @@ name: CI
 
 on: [push, pull_request]
 
+# Least privilege (SSDF PO.3.2): jobs only read the repo.
+permissions:
+  contents: read
+
+# Keep in step with infra/docker/Dockerfile.test and scripts/run-ci-local.sh.
+env:
+  UV_VERSION: "0.12.19"
+  PYTHON_VERSION: "3.13"
+
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # app/main.py runs create_all against Postgres at import time, so tests need
+    # a reachable DB even though conftest swaps in SQLite. Mirrors
+    # infra/compose/docker-compose.test.yml (throwaway CI-only credentials).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sportsbook_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sportsbook_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    # Read by app/config.py (DATABASE_URL is ignored).
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sportsbook_test
+
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to commit SHAs; Dependabot bumps SHA and tag comment together.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          python-version: "3.11"
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies with uv
-        run: uv pip install -r requirements.txt --system
+      # Exact versions from uv.lock; fails if pyproject.toml and uv.lock disagree.
+      - name: Install dependencies
+        run: uv sync --locked --extra test
 
       - name: Run tests
-        run: pytest -v
+        run: uv run --locked --no-sync pytest -v
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # The requirements/*.txt exports must match uv.lock (regenerate with `make lock`).
+      - name: Check requirements exports are current
+        run: |
+          make lock
+          git diff --exit-code -- uv.lock requirements/
+
+      # Known-vulnerability scan (SSDF PW.4) of every locked dependency, all extras.
+      - name: pip-audit
+        run: |
+          uv export --locked --all-extras --no-emit-project --quiet -o "$RUNNER_TEMP/audit-reqs.txt"
+          uvx --from pip-audit==2.10.1 pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/audit-reqs.txt"

@@ -1,10 +1,25 @@
-FROM python:3.12-slim
+# Test image. Mirrors .github/workflows/ci.yaml: same Python, same uv version,
+# same `uv sync --locked --extra test` from uv.lock.
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /usr/local/bin/uv
 
 WORKDIR /app
+# Venv outside /app so a bind-mounted checkout can't shadow it.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_PYTHON=/usr/local/bin/python3.13 \
+    UV_LINK_MODE=copy VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
 
-COPY requirements/test.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Dependency layer (cached until pyproject.toml/uv.lock change).
+COPY pyproject.toml uv.lock /app/
+RUN uv sync --locked --extra test --no-install-project
 
-COPY src /app
+COPY src/ /app/src/
+COPY tests/ /app/tests/
+# Pick'em tooling; tests/test_push_pickem_to_sheets.py imports scripts/.
+# examples/ is deliberately not copied: tests use inline fixtures.
+COPY scripts/ /app/scripts/
+# tests/test_readme_features.py checks the README against the Makefile and app.
+COPY README.md Makefile /app/
+RUN uv sync --locked --extra test
 
-CMD ["pytest", "--maxfail=1", "--disable-warnings", "-q"]
+CMD ["pytest", "-v"]
